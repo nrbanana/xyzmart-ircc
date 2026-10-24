@@ -1,0 +1,10 @@
+[
+  {"sku": "HP-100", "category": "headphones", "description": "Over-ear wireless headphones with active noise cancelling, 40 hour battery, premium sound."},
+  {"sku": "HP-200", "category": "headphones", "description": "Lightweight wireless headphones, 30 hour battery, everyday listening, same AuraSound sound profile."},
+  {"sku": "HP-300", "category": "headphones", "description": "Wireless noise cancelling headphones for travel, 35 hour battery, foldable."},
+  {"sku": "SN-100", "category": "running shoes", "description": "Trail running shoes with grippy sole, waterproof upper, cushioned for long runs."},
+  {"sku": "SN-200", "category": "running shoes", "description": "Previous model trail running shoes, grippy sole, cushioned, great value."},
+  {"sku": "SN-300", "category": "running shoes", "description": "Road running shoes, flexible and light, cushioned for daily runs."},
+  {"sku": "CM-100", "category": "coffee machine", "description": "Espresso machine with milk frother, 15 bar pump, stainless steel."},
+  {"sku": "CM-200", "category": "coffee machine", "description": "Compact espresso machine with milk frother, 15 bar pump, small kitchens."}
+]

@@ -1,0 +1,6 @@
+# Never upload local secrets, the laptop database or tests to Cloud Build.
+.env
+*.db
+tests/
+__pycache__/
+.pytest_cache/

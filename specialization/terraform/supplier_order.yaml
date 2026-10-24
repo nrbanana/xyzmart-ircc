@@ -1,0 +1,79 @@
+# Supplier order workflow. Input: order_id, sku, quantity, priority, idempotency_key, needs_approval.
+main:
+  params: [order]
+  steps:
+    - wait_for_approval:
+        switch:
+          - condition: $${order.needs_approval}
+            steps:
+              - make_callback:
+                  call: events.create_callback_endpoint
+                  args:
+                    http_callback_method: POST
+                  result: callback
+              - tell_tool_service:
+                  call: http.post
+                  args:
+                    url: $${"${tool_url}/supplier-orders/" + order.order_id + "/status"}
+                    auth:
+                      type: OIDC
+                    body:
+                      status: PENDING_APPROVAL
+                      approval_url: $${callback.url}
+              - wait_for_person:
+                  call: events.await_callback
+                  args:
+                    callback: $${callback}
+                    timeout: 86400
+    - get_supplier_key:
+        call: googleapis.secretmanager.v1.projects.secrets.versions.accessString
+        args:
+          project_id: ${project_id}
+          secret_id: supplier-api-key
+        result: api_key
+    - send_to_supplier:
+        try:
+          call: http.post
+          args:
+            url: ${supplier_url}/orders
+            auth:
+              type: OIDC
+            headers:
+              X-Api-Key: $${api_key}
+            body:
+              sku: $${order.sku}
+              quantity: $${order.quantity}
+              priority: $${order.priority}
+              idempotency_key: $${order.idempotency_key}
+          result: reply
+        retry:
+          predicate: $${http.default_retry_predicate}
+          max_retries: 3
+          backoff:
+            initial_delay: 1
+            max_delay: 10
+            multiplier: 2
+        except:
+          as: error
+          steps:
+            - mark_queued:
+                call: http.post
+                args:
+                  url: $${"${tool_url}/supplier-orders/" + order.order_id + "/status"}
+                  auth:
+                    type: OIDC
+                  body:
+                    status: QUEUED
+            - stop_queued:
+                return: QUEUED
+    - mark_ordered:
+        call: http.post
+        args:
+          url: $${"${tool_url}/supplier-orders/" + order.order_id + "/status"}
+          auth:
+            type: OIDC
+          body:
+            status: ORDERED
+            supplier_ref: $${reply.body.supplier_ref}
+    - done:
+        return: ORDERED

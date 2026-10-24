@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>xyzMart Recovery Agent</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --text: #1d2330; --muted: #5f6b7a; --line: #dfe3e8;
+    --accent: #1a66d6; --ok: #1e7f4f; --ok-bg: #e5f4ec; --bad: #b3261e; --bad-bg: #fbe9e7;
+    --warn: #8a5a00; --warn-bg: #fdf1d8; --code: #f1f3f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1b1f27; --text: #e6e9ee; --muted: #9aa4b2; --line: #2c323d;
+      --accent: #6aa3ff; --ok: #6fd3a0; --ok-bg: #173226; --bad: #ff8a80; --bad-bg: #3a1d1b;
+      --warn: #f3c66b; --warn-bg: #3a2f17; --code: #232833;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 20px 16px 8px; max-width: 1200px; margin: 0 auto; }
+  header h1 { margin: 0; font-size: 22px; }
+  header p { margin: 4px 0 0; color: var(--muted); }
+  main { max-width: 1200px; margin: 0 auto; padding: 8px 16px 40px;
+         display: grid; grid-template-columns: 340px 1fr; gap: 16px; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  select, button { font: inherit; width: 100%; padding: 8px 10px; border-radius: 8px;
+                   border: 1px solid var(--line); background: var(--card); color: var(--text); }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; margin-top: 14px; }
+  button.small { width: auto; padding: 4px 10px; font-size: 13px; }
+  button:disabled { opacity: .5; cursor: default; }
+  .switch { display: flex; align-items: center; gap: 8px; margin: 8px 0; color: var(--text); font-size: 14px; }
+  .switch input { width: 18px; height: 18px; }
+  .stack { display: grid; gap: 16px; align-content: start; }
+  .step { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; }
+  .step summary { padding: 8px 10px; cursor: pointer; display: flex; gap: 8px; align-items: center; }
+  .step .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .step .tool { font-family: ui-monospace, Menlo, monospace; font-weight: 600; }
+  .step .brief { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  pre { margin: 0; padding: 8px 10px; background: var(--code); font-size: 12px; overflow-x: auto;
+        border-top: 1px solid var(--line); white-space: pre-wrap; word-break: break-word; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; font-weight: 600; }
+  .ok { background: var(--ok-bg); color: var(--ok); }
+  .bad { background: var(--bad-bg); color: var(--bad); }
+  .warn { background: var(--warn-bg); color: var(--warn); }
+  .muted { color: var(--muted); }
+  .offer { font-size: 17px; margin: 8px 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 600px) { .grid2 { grid-template-columns: 1fr; } }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .scroll { overflow-x: auto; }
+  .hint { font-size: 13px; color: var(--muted); margin: 10px 0 0; }
+  .hint b { color: var(--text); font-weight: 600; }
+  .flow { font-size: 14px; margin-bottom: 10px; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>xyzMart inventory recovery agent</h1>
+  <p>Every online purchase is an event on the live stock feed. When a purchase cannot be filled, the agent checks whether the item is really sold out, orders more from the supplier, and sends the customer an offer.</p>
+</header>
+<main>
+  <div class="stack">
+    <section>
+      <h2>1. A customer buys online</h2>
+      <label for="customer">Customer</label>
+      <select id="customer"></select>
+      <label for="product">Product</label>
+      <select id="product"></select>
+      <label for="warehouse">Ships from</label>
+      <select id="warehouse"><option>SYD</option><option>MEL</option></select>
+      <button class="primary" id="buy">Customer buys</button>
+      <button id="again" disabled style="margin-top:8px">Send the same alert again</button>
+      <p class="hint">Try: <b>SN-100 from SYD</b> twice (last unit sells, then it is sold out) ·
+        <b>HP-300 from SYD</b> (false alarm: MEL has stock) · <b>Max</b> (his order note is a trick)</p>
+    </section>
+    <section>
+      <h2>Break it</h2>
+      <label class="switch"><input type="checkbox" id="supplier_down"> Supplier down</label>
+      <label class="switch"><input type="checkbox" id="ai_off"> AI off (use fixed rules)</label>
+      <button id="reset" style="margin-top:8px">Reset demo data</button>
+    </section>
+    <section>
+      <h2>Supplier orders waiting</h2>
+      <div id="orders" class="muted">None</div>
+    </section>
+  </div>
+
+  <div class="stack">
+    <section>
+      <div class="row"><h2>2. What happened</h2><span id="status"></span></div>
+      <div id="flow" class="flow muted">Press "Customer buys" to start.</div>
+      <div id="note" class="muted"></div>
+      <div id="steps"></div>
+    </section>
+    <section>
+      <h2>3. Offer to the customer</h2>
+      <div id="offer" class="muted">No offer yet.</div>
+    </section>
+    <section>
+      <h2>Offers sent</h2>
+      <div id="offers" class="scroll muted">None yet.</div>
+    </section>
+    <section>
+      <h2>Live data</h2>
+      <div class="grid2">
+        <div class="scroll" id="stock"></div>
+        <div class="scroll"><div id="customers"></div>
+          <p class="hint">This is the loyalty view the agent reads. Surname, email and card number are in a private table it cannot see.</p></div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const api = async (path, body) => {
+  const r = await fetch(path, body === undefined ? {} :
+    {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  return r.json();
+};
+const OFFER_NAMES = {priority_reservation: "Priority reservation", substitute: "In-stock alternative",
+                     back_in_stock_alert: "Back-in-stock alert", ship_from_other_warehouse: "Ship from another warehouse"};
+let lastAlertId = null;
+
+function table(rows, cols) {
+  return `<table><tr>${cols.map(([, h]) => `<th>${h}</th>`).join("")}</tr>${rows.map((r) =>
+    `<tr>${cols.map(([k]) => `<td>${esc(r[k])}</td>`).join("")}</tr>`).join("")}</table>`;
+}
+
+function brief(output) {
+  if (!output) return "waiting...";
+  if (output.error) return "error: " + output.error;
+  if (output.results) return output.results.map((r) => r.sku).join(", ") || "nothing in stock";
+  if (output.tier) return `${output.first_name}, ${output.tier}, spend $${output.spend_12m}`;
+  if (output.status) return `${output.order_id} ${output.status}`;
+  if ("available" in output) return `${output.available} available in total, restock ${output.restock_date ?? "n/a"}`;
+  return "";
+}
+
+async function loadData(keepSelection) {
+  const data = await api("/api/demo-data");
+  if (data.error) { $("flow").textContent = "Tool service: " + data.error; return; }
+  const chosen = [$("customer").value, $("product").value];
+  const bySku = {};
+  data.stock.forEach((s) => { (bySku[s.sku] ??= {name: s.name, stock: []}).stock.push(`${s.warehouse} ${s.quantity}`); });
+  $("customer").innerHTML = data.customers.map((c) =>
+    `<option value="${c.customer_id}">${esc(c.first_name)} (${c.tier})</option>`).join("");
+  $("product").innerHTML = Object.entries(bySku).map(([sku, p]) =>
+    `<option value="${sku}">${sku} ${esc(p.name)} [${p.stock.join(", ")}]</option>`).join("");
+  if (keepSelection) [$("customer").value, $("product").value] = chosen;
+  $("stock").innerHTML = table(data.stock, [["sku", "SKU"], ["warehouse", "Store"], ["quantity", "Qty"], ["restock_date", "Restock"]]);
+  $("customers").innerHTML = table(data.customers, [["customer_id", "ID"], ["first_name", "Name"], ["tier", "Tier"],
+    ["spend_12m", "12m spend"], ["order_note", "Order note"]]);
+  const sw = await api("/api/switches");
+  $("supplier_down").checked = sw.supplier_down;
+  $("ai_off").checked = sw.ai_off;
+}
+
+async function loadOrders() {
+  const {open = [], error} = await api("/api/orders");
+  if (error) { $("orders").textContent = error; return; }
+  $("orders").innerHTML = open.length ? open.map((o) => `
+    <div class="row" style="margin-bottom:8px">
+      <span><b>${o.order_id}</b> ${o.sku} x ${o.quantity}<br>
+        <span class="badge ${o.status === "QUEUED" ? "warn" : "bad"}">${o.status === "QUEUED" ? "Queued, supplier down" : "Needs approval"}</span></span>
+      <button class="small" onclick="sendOrder('${o.order_id}')">${o.status === "QUEUED" ? "Retry" : "Approve"}</button>
+    </div>`).join("") : "None";
+  const {offers = []} = await api("/api/offers");
+  $("offers").innerHTML = offers.length ? table(offers, [["alert_id", "Alert"], ["customer_id", "Customer"],
+    ["offer_type", "Offer"], ["sku", "SKU"], ["discount_percent", "% off"], ["supplier_order_id", "Order"]]) : "None yet.";
+}
+
+async function sendOrder(id) {
+  await api(`/api/orders/${id}/send`, {});
+  await sleep(1500);  // in Google Cloud the workflow finishes the order a moment later
+  loadOrders();
+}
+
+function setStatus(kind, text, source) {
+  $("status").innerHTML = `<span class="badge ${kind}">${text}</span>` + (source ?
+    ` <span class="badge ${source === "ai" ? "ok" : "warn"}">${source === "ai" ? "Decided by the AI agent" : "Fixed rules"}</span>` : "");
+}
+
+function renderRun(run) {
+  const label = {received: ["warn", "Running"], running: ["warn", "Running"], done: ["ok", "Done"],
+                 skipped: ["warn", "Skipped"], error: ["bad", "Error"]}[run.status];
+  setStatus(label[0], label[1], run.source);
+  $("note").textContent = [run.note, run.tokens ? `${run.tokens} tokens` : ""].filter(Boolean).join(" · ");
+  $("steps").innerHTML = run.steps.map((s, i) => `
+    <details class="step"><summary><span class="n">${i + 1}</span><span class="tool">${s.tool}</span>
+      <span class="brief">${esc(brief(s.output))}</span></summary>
+      <pre>input:  ${esc(JSON.stringify(s.input))}\noutput: ${esc(JSON.stringify(s.output, null, 2))}</pre></details>`).join("");
+  if (!run.check) { $("offer").innerHTML = run.status === "skipped" ? "No new offer: this alert was already handled." : "Working..."; return; }
+  const {offer, approved, problems, tier, discount_cap} = run.check;
+  const proposed = run.proposed_offer;
+  $("offer").innerHTML = `
+    <div class="offer"><b>${OFFER_NAMES[offer.offer_type]}</b> · ${offer.sku} · ${offer.discount_percent}% off</div>
+    <p>"${esc(offer.message_to_customer)}"</p>
+    <p>Sell-out check: ${offer.sold_out ? "really sold out in every warehouse" : "only this warehouse was empty, so no reorder and no discount"}.</p>
+    <p>Discount check: ${run.source === "ai" ? "AI" : "rules"} asked for ${proposed.discount_percent}%, limit for ${tier} is ${discount_cap}%, sent ${offer.discount_percent}%.
+      <span class="badge ${approved ? "ok" : "bad"}">${approved ? "Within the rules" : "Refused and corrected by the tool service"}</span></p>
+    ${problems.length ? `<ul>${problems.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
+    <p class="muted">Supplier order: ${offer.supplier_order_id ?? "none"}</p>`;
+}
+
+async function waitForRun(alertId) {
+  let run;
+  for (let i = 0; i < 200; i++) {
+    run = await fetch(`/api/runs/${alertId}`).then((r) => r.ok ? r.json() : null);
+    if (run) renderRun(run);
+    if (run && !["received", "running"].includes(run.status)) return;
+    await sleep(600);
+  }
+}
+
+async function buy() {
+  $("buy").disabled = $("again").disabled = true;
+  $("steps").innerHTML = $("note").textContent = "";
+  $("offer").innerHTML = '<span class="muted">No offer yet.</span>';
+  setStatus("warn", "Sending");
+  const event = await api("/api/purchase", {customer_id: $("customer").value, sku: $("product").value, warehouse: $("warehouse").value});
+  $("flow").innerHTML = `Stock feed: <b>${event.event_id}</b> sale of ${event.sku} from ${event.warehouse}...`;
+  let result;
+  for (let i = 0; i < 50 && !(result && result.result); i++) { await sleep(400); result = await api(`/api/events/${event.event_id}`); }
+  if (!result || !result.result) { setStatus("bad", "No answer from the stock feed"); $("buy").disabled = false; return; }
+  if (result.result === "sold") {
+    $("flow").innerHTML = `Stock feed: <b>${event.event_id}</b> sale of ${event.sku} from ${event.warehouse} <span class="badge ok">Sold</span> No alert, the agent is not needed.`;
+    setStatus("ok", "Sold");
+  } else {
+    $("flow").innerHTML = `Stock feed: <b>${event.event_id}</b> sale of ${event.sku} from ${event.warehouse} <span class="badge bad">None left</span> → alert <b>${result.alert_id}</b> → agent`;
+    lastAlertId = result.alert_id;
+    await waitForRun(lastAlertId);
+    $("again").disabled = false;
+  }
+  $("buy").disabled = false;
+  loadData(true);
+  loadOrders();
+}
+
+async function again() {
+  $("again").disabled = true;
+  await api(`/api/alerts/${lastAlertId}/redeliver`, {});
+  await sleep(800);
+  await waitForRun(lastAlertId);
+  $("again").disabled = false;
+}
+
+$("buy").onclick = buy;
+$("again").onclick = again;
+$("reset").onclick = async () => { await api("/api/reset", {}); location.reload(); };
+["supplier_down", "ai_off"].forEach((id) => $(id).onchange = () =>
+  api("/api/switches", {supplier_down: $("supplier_down").checked, ai_off: $("ai_off").checked}));
+loadData().then(loadOrders);
+</script>
+</body>
+</html>
