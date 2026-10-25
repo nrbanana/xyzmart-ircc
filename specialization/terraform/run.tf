@@ -97,9 +97,10 @@ resource "google_cloud_run_v2_service" "svc" {
   }
 
   lifecycle {
-    # `gcloud run deploy --source` owns the image and adds its own labels.
+    # `gcloud run deploy --source` owns the image, its labels and the revision name (the release
+    # pipeline names revisions when it tags a candidate).
     ignore_changes = [template[0].containers[0].image, template[0].labels, template[0].annotations,
-    client, client_version, build_config]
+    template[0].revision, client, client_version, build_config]
   }
 
   depends_on = [google_secret_manager_secret_iam_member.readers, google_secret_manager_secret_version.secret]

@@ -1,0 +1,72 @@
+openapi: 3.0.3
+info:
+  title: xyzMart stock-out events
+  version: 1.0.0
+  description: |
+    The one message other systems send to the recovery agent: a signed-in customer's purchase found
+    no stock in the warehouse it would ship from. The API front door (Apigee) checks the caller's key,
+    limits its rate, validates the body against this file, and publishes it to the Pub/Sub topic
+    stockout-events. Same contract as the README ("Stock-out event contract") and the StockoutEvent
+    model in proto/agent/main.py.
+servers:
+  - url: https://api.xyzmart.example/v1
+paths:
+  /stockouts:
+    post:
+      summary: Report a purchase that found no stock
+      security:
+        - apiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StockoutEvent"
+            example:
+              event_id: WEB-7F3A21C4
+              sku: SN-100
+              warehouse: SYD
+              customer_id: C-1002
+              occurred_at: "2026-10-24T09:15:02+11:00"
+      responses:
+        "200":
+          description: Accepted and queued for the agent. Safe to retry with the same event_id.
+        "400":
+          description: The body breaks this contract. Do not retry unchanged.
+        "401":
+          description: Missing or unknown API key.
+        "429":
+          description: Too many requests from this caller. Retry later.
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas:
+    StockoutEvent:
+      type: object
+      required: [event_id, sku, warehouse, customer_id, occurred_at]
+      additionalProperties: true # extra fields are ignored, so senders can add their own
+      properties:
+        event_id:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Unique per failed purchase. Repeats are recognised and skipped.
+        sku:
+          type: string
+          minLength: 1
+          description: The product the customer tried to buy
+        warehouse:
+          type: string
+          enum: [SYD, MEL]
+          description: The warehouse that had none
+        customer_id:
+          type: string
+          minLength: 1
+          description: The customer, so the agent knows who to make an offer to
+        occurred_at:
+          type: string
+          format: date-time
+          description: When the purchase failed, ISO 8601 with a time zone

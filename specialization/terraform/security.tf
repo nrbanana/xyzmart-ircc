@@ -63,11 +63,12 @@ resource "google_pubsub_topic_iam_member" "publishers" {
 
 resource "google_cloud_run_v2_service_iam_member" "invokers" {
   for_each = {
-    "pubsub-push agent"      = ["pubsub-push", "agent"]
-    "agent tool-service"     = ["agent", "tool-service"]
-    "agent supplier-stub"    = ["agent", "supplier-stub"] # demo "Supplier down" switch
-    "workflow tool-service"  = ["workflow", "tool-service"]
-    "workflow supplier-stub" = ["workflow", "supplier-stub"]
+    "pubsub-push agent"        = ["pubsub-push", "agent"]
+    "pubsub-push tool-service" = ["pubsub-push", "tool-service"] # budget kill switch
+    "agent tool-service"       = ["agent", "tool-service"]
+    "agent supplier-stub"      = ["agent", "supplier-stub"] # demo "Supplier down" switch
+    "workflow tool-service"    = ["workflow", "tool-service"]
+    "workflow supplier-stub"   = ["workflow", "supplier-stub"]
   }
   name   = google_cloud_run_v2_service.svc[each.value[1]].name
   role   = "roles/run.invoker"
@@ -141,7 +142,14 @@ resource "google_secret_manager_secret_iam_member" "readers" {
   member    = google_service_account.sa[each.value[1]].member
 }
 
-# ---- budget alert: emails billing admins at 50%, 90% and 100% ----
+# ---- budget: emails billing admins at 50%, 90% and 100%, and sends every spend report to the
+# budget-alerts topic. At 100% the tool service switches the agent to fixed rules (kill switch). ----
+
+resource "google_pubsub_topic_iam_member" "billing_publishes_budget" {
+  topic  = google_pubsub_topic.topic["budget-alerts"].name
+  role   = "roles/pubsub.publisher"
+  member = "serviceAccount:billing-budget-alert@system.gserviceaccount.com"
+}
 
 resource "google_billing_budget" "main" {
   billing_account = var.billing_account
@@ -161,5 +169,9 @@ resource "google_billing_budget" "main" {
       threshold_percent = threshold_rules.value
     }
   }
-  depends_on = [google_project_service.apis]
+  all_updates_rule {
+    pubsub_topic   = google_pubsub_topic.topic["budget-alerts"].id
+    schema_version = "1.0"
+  }
+  depends_on = [google_project_service.apis, google_pubsub_topic_iam_member.billing_publishes_budget]
 }

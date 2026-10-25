@@ -1,0 +1,4 @@
+<SpikeArrest name="Spike-Arrest">
+  <Rate>50ps</Rate>
+  <UseEffectiveCount>true</UseEffectiveCount>
+</SpikeArrest>

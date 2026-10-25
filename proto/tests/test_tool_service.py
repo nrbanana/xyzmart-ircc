@@ -1,6 +1,6 @@
 """The business rules and duplicate checks live in the tool service, so they are tested here."""
 
-from conftest import tool_main
+from conftest import push, tool_main
 from fastapi.testclient import TestClient
 
 client = TestClient(tool_main.app)
@@ -49,6 +49,31 @@ def test_reset_restores_stock_and_forgets_events():
     client.post("/admin/reset")
     assert client.get("/stock/SN-100").json()["available"] == 1
     assert client.post("/stockout-events", json=stockout()).json() == {"duplicate": False}
+
+
+# ---- AI on/off setting and budget kill switch -------------------------------
+
+def budget(cost, amount=50):
+    return client.post("/pubsub/budget", json=push({"costAmount": cost, "budgetAmount": amount,
+                                                   "currencyCode": "AUD"})).json()
+
+
+def test_budget_under_the_limit_changes_nothing():
+    assert budget(49.99) == {"result": "under budget"}
+    assert client.get("/settings").json() == {"ai_off": False, "reason": ""}
+
+
+def test_budget_reached_switches_ai_off_until_a_person_switches_it_back():
+    assert budget(50) == {"result": "ai switched off"}
+    assert client.get("/settings").json() == {"ai_off": True, "reason": "budget reached: 50.00 of 50.00 AUD"}
+    assert budget(10) == {"result": "under budget"}  # a later, lower report does not switch AI back on
+    assert client.get("/settings").json()["ai_off"] is True
+    assert client.post("/settings", json={"ai_off": False}).json()["ai_off"] is False
+
+
+def test_bad_budget_message_is_acknowledged_and_ignored():
+    assert client.post("/pubsub/budget", json=push({"nonsense": 1})).json()["result"] == "ignored"
+    assert client.get("/settings").json()["ai_off"] is False
 
 
 # ---- tools -----------------------------------------------------------------

@@ -59,7 +59,7 @@ resource "random_id" "suffix" {
 locals {
   apis = [
     "aiplatform", "artifactregistry", "bigquery", "billingbudgets", "cloudbuild", "cloudkms",
-    "compute", "discoveryengine", "iam", "iamcredentials", "pubsub", "run", "secretmanager",
+    "compute", "discoveryengine", "iam", "iamcredentials", "monitoring", "pubsub", "run", "secretmanager",
     "servicenetworking", "sqladmin", "sts", "workflowexecutions", "workflows",
   ]
   # Cloud Run addresses are predictable, so subscriptions and the workflow can refer to them.

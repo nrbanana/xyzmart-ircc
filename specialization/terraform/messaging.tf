@@ -2,9 +2,10 @@
 #
 #   stockout-events a web shop purchase found no stock -> agent
 #   customer-offers the checked offer                  -> customer channels (here: an audit subscription)
+#   budget-alerts   spend reports from the budget      -> tool service (kill switch at 100%)
 
 resource "google_pubsub_topic" "topic" {
-  for_each   = toset(["stockout-events", "customer-offers"])
+  for_each   = toset(["stockout-events", "customer-offers", "budget-alerts"])
   name       = each.value
   depends_on = [google_project_service.apis]
 }
@@ -12,6 +13,7 @@ resource "google_pubsub_topic" "topic" {
 locals {
   push = {
     "stockout-events" = "${local.url["agent"]}/pubsub/stockouts"
+    "budget-alerts"   = "${local.url["tool-service"]}/pubsub/budget"
   }
 }
 

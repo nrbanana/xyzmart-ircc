@@ -1,0 +1,17 @@
+<!-- Every request passes these checks in order. Any failure stops it before it reaches Google Cloud. -->
+<ProxyEndpoint name="default">
+  <PreFlow name="PreFlow">
+    <Request>
+      <Step><Name>Verify-API-Key</Name></Step>      <!-- one key per calling system -->
+      <Step><Name>Spike-Arrest</Name></Step>        <!-- smooths bursts -->
+      <Step><Name>Quota-Per-Caller</Name></Step>    <!-- caps each caller per minute -->
+      <Step><Name>Validate-Contract</Name></Step>   <!-- the body must match stockout-api.yaml -->
+    </Request>
+  </PreFlow>
+  <HTTPProxyConnection>
+    <BasePath>/v1/stockouts</BasePath>
+  </HTTPProxyConnection>
+  <RouteRule name="pubsub">
+    <TargetEndpoint>pubsub</TargetEndpoint>
+  </RouteRule>
+</ProxyEndpoint>

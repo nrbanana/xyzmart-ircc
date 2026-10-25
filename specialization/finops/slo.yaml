@@ -1,0 +1,77 @@
+# Speed and cost targets for the recovery agent.
+#
+# measured: from real runs on Google Cloud and the quality checks (gemini-3.6-flash, October 2026).
+# enforced_by: where the target is held. "code" means a rule that runs on every decision;
+# "alert" means specialization/terraform/monitoring.tf.
+
+service: xyzMart inventory recovery agent
+window: 30 days
+
+slos:
+  - name: Stock-out to offer
+    sli: seconds from the stock-out event arriving to the checked offer being sent (log field "seconds")
+    target: 95% within 10 seconds
+    measured: about 6 seconds
+    enforced_by:
+      - code: after 60 seconds the agent stops and the fixed rules answer instead (AGENT_TIMEOUT_SECONDS)
+      - alert: 95th percentile above 10 seconds over 10 minutes
+
+  - name: Successful decisions
+    sli: stock-out events that end with an offer sent, out of all valid events
+    target: 99.5%
+    measured: every demo and quality-check run
+    note: a fixed-rules answer counts as a success, but is labelled "rules" in the logs so the AI's own
+      rate can be watched separately (log-based metrics carry a "source" label)
+    enforced_by:
+      - code: rules fallback for a slow, failing or ungrounded model
+      - alert: more than 5 server errors in 10 minutes
+
+  - name: Tool calls
+    sli: tool service response time
+    target: 95% within 0.8 seconds
+    note: target only. The tools are thin database and search calls over the private network
+
+budgets:
+  - name: Tokens per decision
+    target: alert above 6,000; hard ceiling 8,000
+    measured: about 5,100 on average (77,000 tokens across 15 quality-check runs)
+    enforced_by:
+      - code: TOKEN_CEILING in proto/agent/main.py stops the model and uses the fixed rules
+      - alert: 95th percentile above 6,000
+
+  - name: Cost per decision
+    target: A$0.01 or less
+    measured: about A$0.006 with Flash
+    note: the Pro model is only used as the quality-check judge, never per decision
+
+  - name: Monthly spend
+    target: A$50 for the demo project; set per tenant in production
+    enforced_by:
+      - budget: emails billing admins at 50%, 90% and 100%
+      - code: kill switch. At 100% the budget's report reaches the tool service (/pubsub/budget), which
+          switches the agent to fixed rules. Customers still get offers; Gemini spend stops. A person
+          switches AI back on. Cutting billing entirely is the harsher option, not used because it
+          would stop the whole service.
+
+  - name: Quality checks per release
+    target: under A$0.50 a run
+    measured: a few cents (15 agent runs and 15 judge calls)
+
+savings:
+  - name: Context caching
+    status: on by default
+    detail: the instruction and the four tool descriptions are the same on every call. Gemini caches
+      repeated prompt beginnings automatically and charges less for them. At higher volume, explicit
+      caching (ADK ContextCacheConfig) makes the saving predictable.
+
+  - name: Semantic router (answer repeats without the model)
+    status: target, not built
+    detail: the same product, loyalty tier and sold-out state within 10 minutes gives the same kind of
+      offer. A router would reuse the last decision's offer type and discount, still check live stock
+      and place the supplier order, and skip the model. Worth building when one product sells out for
+      many customers at once (a sale event); at demo volume it would save cents.
+
+  - name: Right-sized model
+    status: in place
+    detail: Flash for every decision. Flash-Lite was tested and is about 3 times cheaper but weaker at
+      choosing tools; the saving at this volume does not justify the risk.

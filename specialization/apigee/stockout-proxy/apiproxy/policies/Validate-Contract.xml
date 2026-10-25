@@ -1,0 +1,7 @@
+<OASValidation name="Validate-Contract">
+  <Source>request</Source>
+  <OASResource>oas://stockout-api.yaml</OASResource>
+  <Options>
+    <ValidateMessageBody>true</ValidateMessageBody>
+  </Options>
+</OASValidation>

@@ -11,6 +11,7 @@ Specialisation: **Track C, platform and security.**
 | 2 minutes | [What it does](#1-what-it-does) and the diagram |
 | 10 minutes | add [Try it on your laptop](#2-try-it-on-your-laptop) and [Design decisions](#5-design-decisions) |
 | More | [How it works](#4-how-it-works), [Security](#6-security-track-c), [Quality checks](#8-tests-and-quality-checks), [Release pipeline](#9-release-pipeline-track-c) |
+| The Track C deep dive | [`specialization/README.md`](specialization/README.md): security boundary, calling suppliers safely, secrets, speed and cost targets |
 
 ---
 
@@ -20,7 +21,7 @@ Specialisation: **Track C, platform and security.**
 
 Editable source: [`docs/architecture.excalidraw`](docs/architecture.excalidraw) (open at excalidraw.com).
 
-1. **A customer's purchase finds no stock.** The web shop sends one stock-out event (Pub/Sub topic `stockout-events`). Ordinary sales are not sent: the web shop and order system own the stock count.
+1. **A customer's purchase finds no stock.** The web shop sends one stock-out event to a message queue (Pub/Sub topic `stockout-events`). Ordinary sales are not sent: the web shop and order system own the stock count.
 2. **The event wakes the recovery agent.** It is checked against the contract and recorded by its id, so a repeat delivery is skipped.
 3. **Gemini decides what to check.** The agent is one ADK agent with four tools.
 4. **The agent checks stock, loyalty and similar products** through the tool service. Its first decision: is this a real sell-out, or does another warehouse still have stock?
@@ -150,7 +151,7 @@ Edit `proto/.env` and pick one:
 - **You do not:** set `GOOGLE_GENAI_USE_ENTERPRISE=FALSE` and paste a free key from [Google AI Studio](https://aistudio.google.com/apikey) into `GOOGLE_API_KEY`.
 
 ```bash
-make test             # 26 tests, no network or model needed
+make test             # 32 tests, no network or model needed
 make local            # starts the three services, then open http://localhost:8080
 ```
 
@@ -191,7 +192,7 @@ gcloud config set project YOUR_PROJECT_ID
 | `make destroy` | Removes everything, then lists anything left that could still cost money |
 | `make cost-check` | Just the list |
 
-**Cost:** about A$1 a day while deployed, mostly the smallest Cloud SQL instance. Everything else scales to zero or is pay per use. A budget alert emails at 50%, 90% and 100% of A$50.
+**Cost:** about A$1 a day while deployed, mostly the smallest Cloud SQL instance. Everything else scales to zero or is pay per use. A budget alert emails at 50%, 90% and 100% of A$50, and at 100% the agent switches to fixed rules so Gemini spend stops.
 
 **Regions:** everything runs in Sydney (`australia-southeast1`) except two services Google does not offer there: Gemini 3.x is called at location `global`, and Vertex AI Search uses `global`.
 
@@ -216,6 +217,8 @@ gcloud config set project YOUR_PROJECT_ID
 | A tool call fails | Retried twice with backoff, then the agent carries on with what it has |
 | Gemini is busy (429) or erroring | Retried up to 4 times with backoff |
 | Gemini still fails, is slow (60s), returns an invalid offer, or answers without calling the required tools | Fixed rules (`proto/agent/rules.py`) produce the same offer format. The screen shows "Fixed rules" |
+| A decision passes 8,000 tokens | The model is stopped and the fixed rules answer (token ceiling) |
+| Spending reaches 100% of the budget | The budget's report switches the agent to fixed rules until a person switches AI back on (kill switch). Customers still get offers |
 | The supplier is down | The order is queued, the customer still gets an offer |
 | Pub/Sub delivers the same message twice | Each event id is recorded in Cloud SQL and acted on once; supplier orders carry an idempotency key |
 | A message is malformed | Acknowledged and ignored, so Pub/Sub does not retry it forever |
@@ -261,9 +264,14 @@ Alternatives must be in stock right now. Supplier orders over 50 units need a pe
 
 **Terraform owns the settings, `gcloud run deploy --source` owns the code.** Terraform creates each Cloud Run service with its identity, network, secrets and who may call it. The deploy step only builds and swaps in the code. No Dockerfiles to maintain.
 
-**Written as configuration but not deployed**, because they need a Google Cloud Organization or a paid add-on a personal project does not have: API front door (Apigee; the demo uses Cloud Run sign-in instead), security boundary (VPC Service Controls), shared network across teams (Shared VPC), and controlled exit to named suppliers only (Secure Web Proxy; the demo uses Cloud NAT).
+**Written as configuration but not deployed**, because they need a Google Cloud Organization or a paid add-on a personal project does not have:
+- security boundary (VPC Service Controls, dry run then enforce) and shared network across teams (Shared VPC): [`org_controls.tf`](specialization/terraform/org_controls.tf);
+- controlled exit to named suppliers only (Secure Web Proxy): [`egress.tf`](specialization/terraform/egress.tf). The demo uses Cloud NAT alone;
+- API front door (Apigee) with per-caller keys, rate limits and contract checks: [`apigee.tf`](specialization/terraform/apigee.tf) and [`specialization/apigee/`](specialization/apigee/stockout-proxy/apiproxy). The demo uses Cloud Run sign-in instead.
 
-**Demo shortcuts, stated plainly.** Run history and the AI-off switch live in the agent's memory, so each service runs at most one instance. Production would keep them in Cloud SQL or Firestore. Terraform state is kept on the laptop; a team would use a Cloud Storage backend.
+Each is behind a setting that is off by default. With it switched on, `terraform plan` produces the full set of resources.
+
+**Demo shortcuts, stated plainly.** Run history and the "Supplier down" switch live in memory, so each service runs at most one instance. Production would keep run history in Cloud SQL or Firestore. The AI on/off setting is already in the database, because the budget kill switch must survive a restart. Terraform state is kept on the laptop; a team would use a Cloud Storage backend.
 
 ---
 
@@ -277,7 +285,10 @@ What the deployed demo does today:
 - **Secrets in Secret Manager, encrypted with xyzMart's own key** (customer-managed encryption key in Cloud KMS, rotated every 90 days). The database password and supplier API key are generated by Terraform and read only by the services that need them.
 - **Signed calls between services.** Pub/Sub, Workflows and the agent call internal services with Google-signed identity tokens, checked by Cloud Run before the code runs.
 - **Keyless release pipeline.** GitHub Actions logs in with Workload Identity Federation; only the main branch can deploy (see [Release pipeline](#9-release-pipeline-track-c)).
-- **Budget alert** at 50%, 90% and 100% of A$50.
+- **Budget kill switch.** Emails at 50%, 90% and 100% of A$50; at 100% the agent switches to fixed rules, so Gemini spend stops but customers still get offers.
+- **Token ceiling and alerts.** A decision is cut off at 8,000 tokens. Cloud Monitoring alerts on slow decisions, high token use and server errors.
+
+The full Track C answers, including what is configuration only: [`specialization/README.md`](specialization/README.md).
 
 ---
 
@@ -308,10 +319,11 @@ proto/                     the working prototype
     seed_data.json         products, stock and the four sample customers
     catalog.json           product descriptions for search
     seed_cloud.py          loads BigQuery and Vertex AI Search during deploy
-  tests/                   26 tests: rules, stock-out events, and full agent runs with the scripted model
+  tests/                   32 tests: rules, stock-out events, kill switch, token ceiling, full agent runs
   requirements.txt         pinned versions, one file for all three services
   .env.example             settings, with comments
 specialization/
+  README.md                the Track C deep dive, as plain answers
   terraform/               all Google Cloud setup, one file per area
     main.tf                project, APIs, settings
     network.tf             private network, Private Google Access, Cloud NAT
@@ -321,6 +333,12 @@ specialization/
     security.tf            service accounts and permissions, KMS key, secrets, budget
     run.tf                 the three Cloud Run services
     ci.tf                  keyless login for the release pipeline
+    monitoring.tf          log-based metrics and alerts for the speed and token targets
+    org_controls.tf        security boundary and Shared VPC (configuration only: needs an Organization)
+    egress.tf              controlled exit to named suppliers (configuration only: paid)
+    apigee.tf              API front door (configuration only: paid)
+  apigee/stockout-proxy/   the front door proxy: key check, rate limits, contract check, publish
+  finops/slo.yaml          speed and cost targets, measured values, how each is held
   evals/
     cases.json             15 golden cases and trick prompts
     run_evals.py           runs the real agent, grades with a judge model, enforces the thresholds
@@ -336,7 +354,7 @@ make test     # unit tests, no network, under a second
 make evals    # quality checks with the real model and a judge model, about 75 seconds
 ```
 
-**Unit tests.** 26 tests with no network: the business rules (discount caps, in-stock only, Gold-only reservations, approval threshold, idempotency), stock-out events (the last unit selling, duplicate events, events outside the contract never reaching the model), and full agent runs with a scripted model, including one where the model obeys the prompt injection and the tool service still refuses it.
+**Unit tests.** 32 tests with no network: the business rules (discount caps, in-stock only, Gold-only reservations, approval threshold, idempotency), stock-out events (the last unit selling, duplicate events, events outside the contract never reaching the model), the budget kill switch and token ceiling, the front door contract matching the code, and full agent runs with a scripted model, including one where the model obeys the prompt injection and the tool service still refuses it.
 
 **Quality checks** (`specialization/evals/`). The unit tests prove the code; these measure the real agent. Each case is a stock-out event pushed through the same path as production, with the real Gemini model and the tool service running on a throwaway copy of the sample data. A stronger model (Gemini 3.1 Pro) then grades each customer message against the tool results the agent had: this is the "LLM as a judge" step.
 

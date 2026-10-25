@@ -1,0 +1,6 @@
+<!-- API front door for stock-out events. Deployed with a service account that may only publish to
+     the stockout-events topic (specialization/terraform/apigee.tf). -->
+<APIProxy name="stockout">
+  <DisplayName>Stock-out events</DisplayName>
+  <Description>Checks the caller, limits its rate, validates the contract, publishes to Pub/Sub.</Description>
+</APIProxy>

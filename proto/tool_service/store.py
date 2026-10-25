@@ -30,6 +30,7 @@ SCHEMA = [
     """CREATE TABLE IF NOT EXISTS supplier_orders (order_id TEXT PRIMARY KEY, idempotency_key TEXT UNIQUE,
            sku TEXT, quantity INTEGER, priority TEXT, status TEXT, supplier_ref TEXT, approval_url TEXT,
            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+    "CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, value TEXT)",
     """CREATE TABLE IF NOT EXISTS stockout_events (event_id TEXT PRIMARY KEY, sku TEXT, warehouse TEXT,
            customer_id TEXT, occurred_at TEXT, received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
 ]
@@ -65,7 +66,7 @@ def init_db(reset: bool = False) -> None:
     for statement in SCHEMA + (LOCAL_CUSTOMER_SCHEMA if RUN_MODE == "local" else []):
         sql(statement)
     if reset:
-        for table in ("stockout_events", "supplier_orders", "stock", "products"):
+        for table in ("settings", "stockout_events", "supplier_orders", "stock", "products"):
             sql(f"DELETE FROM {table}")
     if sql("SELECT COUNT(*) AS n FROM products")[0]["n"]:
         return
@@ -105,6 +106,16 @@ def save_stockout(event: dict) -> bool:
                     " VALUES (:event_id, :sku, :warehouse, :customer_id, :occurred_at)"
                     " ON CONFLICT (event_id) DO NOTHING RETURNING event_id",
                     **event | {"occurred_at": event["occurred_at"].isoformat()}))
+
+
+def get_setting(name: str) -> str:
+    rows = sql("SELECT value FROM settings WHERE name = :name", name=name)
+    return rows[0]["value"] if rows else ""
+
+
+def set_setting(name: str, value: str) -> None:
+    sql("INSERT INTO settings (name, value) VALUES (:name, :value)"
+        " ON CONFLICT (name) DO UPDATE SET value = excluded.value", name=name, value=value)
 
 
 # ---- supplier orders -------------------------------------------------------

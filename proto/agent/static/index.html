@@ -87,6 +87,7 @@
       <h2>Break it</h2>
       <label class="switch"><input type="checkbox" id="supplier_down"> Supplier down</label>
       <label class="switch"><input type="checkbox" id="ai_off"> AI off (use fixed rules)</label>
+      <p class="hint" id="ai_reason"></p>
       <button id="reset" style="margin-top:8px">Reset demo data</button>
     </section>
     <section>
@@ -166,6 +167,7 @@ async function loadData(keepSelection) {
   const sw = await api("/api/switches");
   $("supplier_down").checked = sw.supplier_down;
   $("ai_off").checked = sw.ai_off;
+  $("ai_reason").textContent = sw.ai_off ? `Off: ${sw.ai_off_reason}` : "";
 }
 
 async function loadOrders() {
@@ -250,8 +252,15 @@ async function buy() {
 
 async function again() {
   $("again").disabled = true;
+  const before = (await fetch(`/api/runs/${lastEventId}`).then((r) => r.json())).status;
+  setStatus("warn", "Sent again");
   await api(`/api/stockouts/${lastEventId}/redeliver`, {});
-  await sleep(800);
+  // Through Pub/Sub the repeat takes a few seconds; until it arrives the first run is still on record.
+  for (let i = 0; i < 50; i++) {
+    await sleep(600);
+    const run = await fetch(`/api/runs/${lastEventId}`).then((r) => r.ok ? r.json() : null);
+    if (run && run.status !== before) break;
+  }
   await waitForRun(lastEventId);
   $("again").disabled = false;
 }
@@ -259,8 +268,10 @@ async function again() {
 $("buy").onclick = buy;
 $("again").onclick = again;
 $("reset").onclick = async () => { await api("/api/reset", {}); location.reload(); };
-["supplier_down", "ai_off"].forEach((id) => $(id).onchange = () =>
-  api("/api/switches", {supplier_down: $("supplier_down").checked, ai_off: $("ai_off").checked}));
+["supplier_down", "ai_off"].forEach((id) => $(id).onchange = async () => {
+  const sw = await api("/api/switches", {supplier_down: $("supplier_down").checked, ai_off: $("ai_off").checked});
+  $("ai_reason").textContent = sw.ai_off ? `Off: ${sw.ai_off_reason}` : "";
+});
 loadData().then(loadOrders);
 </script>
 </body>

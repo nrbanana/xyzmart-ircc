@@ -1,0 +1,18 @@
+<!-- Publishes the checked event to Pub/Sub as the proxy's own service account. -->
+<TargetEndpoint name="pubsub">
+  <PreFlow name="PreFlow">
+    <Request>
+      <Step><Name>Build-PubSub-Message</Name></Step>
+    </Request>
+  </PreFlow>
+  <HTTPTargetConnection>
+    <Authentication>
+      <GoogleAccessToken>
+        <Scopes>
+          <Scope>https://www.googleapis.com/auth/pubsub</Scope>
+        </Scopes>
+      </GoogleAccessToken>
+    </Authentication>
+    <URL>https://pubsub.googleapis.com</URL>
+  </HTTPTargetConnection>
+</TargetEndpoint>

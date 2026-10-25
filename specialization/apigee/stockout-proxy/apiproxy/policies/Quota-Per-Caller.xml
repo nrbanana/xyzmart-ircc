@@ -1,0 +1,9 @@
+<!-- 600 stock-out events a minute per calling system: far above normal, low enough to stop a runaway loop. -->
+<Quota name="Quota-Per-Caller">
+  <Identifier ref="verifyapikey.Verify-API-Key.client_id"/>
+  <Allow count="600"/>
+  <Interval>1</Interval>
+  <TimeUnit>minute</TimeUnit>
+  <Distributed>true</Distributed>
+  <Synchronous>true</Synchronous>
+</Quota>

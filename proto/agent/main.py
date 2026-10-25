@@ -8,6 +8,7 @@ Message flow (Pub/Sub in Google Cloud, direct HTTP on the laptop):
 import asyncio
 import json
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,12 +34,13 @@ from shared import cloud  # noqa: E402
 
 SUPPLIER_URL = os.getenv("SUPPLIER_URL", "http://localhost:8082")
 AGENT_TIMEOUT_SECONDS = 60
+TOKEN_CEILING = int(os.getenv("TOKEN_CEILING", "8000"))  # a normal decision uses about 5,000
 
 sessions = InMemorySessionService()
 runner = Runner(agent=agent.root_agent, app_name="ircc", session_service=sessions)
 offers: list[dict] = []
 runs: dict[str, dict] = {}  # event_id -> latest delivery of that event, shown on the demo screen
-switches = {"ai_off": False, "supplier_down": False}
+switches = {"supplier_down": False}  # demo switch; the AI on/off setting lives in the tool service database
 
 
 def required_tools(offer: dict) -> set[str]:
@@ -55,6 +57,8 @@ async def run_agent(stockout: dict, run: dict) -> agent.Offer:
     async for event in runner.run_async(user_id="ircc", session_id=session.id, new_message=message):
         if event.usage_metadata and event.usage_metadata.total_token_count:
             run["tokens"] += event.usage_metadata.total_token_count
+        if run["tokens"] > TOKEN_CEILING:
+            raise RuntimeError(f"token ceiling of {TOKEN_CEILING} reached")
         for call in event.get_function_calls():
             if call.name != "set_model_response":
                 open_calls[call.id] = {"tool": call.name, "input": call.args, "output": None}
@@ -79,8 +83,9 @@ async def handle_stockout(stockout: dict, run: dict) -> None:
         return
     run["status"] = "running"
     try:
-        if switches["ai_off"]:
-            raise RuntimeError("AI switched off")
+        settings = await tools.call_tool_service("GET", "/settings")
+        if settings.get("ai_off"):
+            raise RuntimeError(f"AI switched off ({settings['reason']})")
         offer = (await asyncio.wait_for(run_agent(stockout, run), AGENT_TIMEOUT_SECONDS)).model_dump()
         skipped = required_tools(offer) - {step["tool"] for step in run["steps"]}
         if skipped:
@@ -97,7 +102,11 @@ async def handle_stockout(stockout: dict, run: dict) -> None:
     if "error" in check:
         run.update(status="error", note=f"Offer check failed: {check['error']}")
         return
-    run.update(check=check, status="done")
+    run.update(check=check, status="done", seconds=round(time.monotonic() - run["started"], 2))
+    # One structured line per decision. In Google Cloud, log-based metrics read it for the speed,
+    # token and fallback targets in specialization/finops/slo.yaml.
+    print(json.dumps({"message": "decision", "event_id": stockout["event_id"], "source": run["source"],
+                      "tokens": run["tokens"], "seconds": run["seconds"], "approved": check["approved"]}), flush=True)
     sent = {"event_id": stockout["event_id"], "customer_id": stockout["customer_id"], **check["offer"]}
     offers.append(sent)
     cloud.publish("customer-offers", sent)
@@ -132,7 +141,8 @@ async def on_stockout(envelope: dict):
         stockout = StockoutEvent(**cloud.read_push(envelope)).model_dump(mode="json")
     except (ValidationError, KeyError, ValueError, TypeError) as e:
         return {"status": "ignored", "reason": str(e)[:200]}
-    run = {"event": stockout, "status": "received", "steps": [], "tokens": 0, "source": None, "note": None}
+    run = {"event": stockout, "status": "received", "steps": [], "tokens": 0, "source": None, "note": None,
+           "started": time.monotonic()}
     runs[stockout["event_id"]] = run
     try:
         await handle_stockout(stockout, run)
@@ -211,13 +221,16 @@ class Switches(BaseModel):
 
 
 @app.get("/api/switches")
-def get_switches():
-    return switches
+async def get_switches():
+    settings = await tools.call_tool_service("GET", "/settings")
+    return switches | {"ai_off": bool(settings.get("ai_off")), "ai_off_reason": settings.get("reason", "")}
 
 
 @app.post("/api/switches")
 async def set_switches(body: Switches):
     async with httpx.AsyncClient(timeout=5, headers=cloud.auth_headers(SUPPLIER_URL)) as client:
         await client.post(f"{SUPPLIER_URL}/switch", json={"down": body.supplier_down})
-    switches.update(body.model_dump())
-    return switches
+    switches["supplier_down"] = body.supplier_down
+    if body.ai_off != (await get_switches())["ai_off"]:  # keep the budget's reason unless a person changes it
+        await tools.call_tool_service("POST", "/settings", json={"ai_off": body.ai_off})
+    return await get_switches()

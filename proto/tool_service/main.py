@@ -2,6 +2,7 @@
 
 It does three jobs:
   1. Records each stock-out event, so a message Pub/Sub delivers twice is acted on once.
+     Holds the AI on/off setting, which the budget kill switch turns off at 100% of budget.
   2. Serves the agent's tools: stock, loyalty, similar products, supplier order.
   3. Enforces the business rules in code, so a tricked or faulty model cannot break them:
      - maximum discount and allowed offer types per loyalty tier
@@ -80,6 +81,40 @@ def demo_purchase(body: Purchase):
     if not store.get_product(body.sku):
         raise HTTPException(404, f"Unknown product {body.sku}")
     return {"result": "sold" if store.take_stock(body.sku, body.warehouse, 1) else "out_of_stock"}
+
+
+# ---- AI on/off setting and the budget kill switch ---------------------------
+
+class Settings(BaseModel):
+    ai_off: bool
+    reason: str = "switched on the demo screen"
+
+
+@app.get("/settings")
+def get_settings():
+    reason = store.get_setting("ai_off")  # empty means AI is on
+    return {"ai_off": bool(reason), "reason": reason}
+
+
+@app.post("/settings")
+def set_settings(body: Settings):
+    store.set_setting("ai_off", body.reason if body.ai_off else "")
+    return get_settings()
+
+
+@app.post("/pubsub/budget")
+def on_budget(envelope: dict):
+    """Pub/Sub push from the billing budget, several times a day. At 100% of the budget the agent
+    switches to fixed rules: customers still get offers, Gemini spend stops. A person switches it back."""
+    try:
+        note = cloud.read_push(envelope)
+        cost, budget = float(note["costAmount"]), float(note["budgetAmount"])
+    except (KeyError, ValueError, TypeError) as e:
+        return {"result": "ignored", "reason": str(e)[:200]}
+    if cost < budget:
+        return {"result": "under budget"}
+    store.set_setting("ai_off", f"budget reached: {cost:.2f} of {budget:.2f} {note.get('currencyCode', '')}".strip())
+    return {"result": "ai switched off"}
 
 
 @app.post("/admin/reset")

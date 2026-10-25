@@ -5,13 +5,14 @@ import asyncio
 import httpx
 import pytest
 from conftest import agent_main, push, tool_main
+from fastapi.testclient import TestClient
 
+import store
 import tools
 
 @pytest.fixture(autouse=True)
 def in_process_tool_service(supplier, monkeypatch):
     monkeypatch.setattr(tools, "TRANSPORT", httpx.ASGITransport(app=tool_main.app))
-    agent_main.switches["ai_off"] = False
 
 
 def run_stockout(customer_id, sku, event_id, warehouse="SYD"):
@@ -91,7 +92,7 @@ def test_bad_event_is_acknowledged_and_never_reaches_the_model():
 
 
 def test_ai_off_uses_rules_with_same_format():
-    agent_main.switches["ai_off"] = True
+    store.set_setting("ai_off", "switched on the demo screen")
     run = run_stockout("C-1003", "HP-100", "T-5")
     assert run["source"] == "rules"
     assert run["check"]["approved"] is True
@@ -114,3 +115,34 @@ def test_supplier_down_still_sends_substitute(supplier):
     run = run_stockout("C-1002", "CM-100", "T-6")
     assert run["steps"][-1]["output"]["status"] == "QUEUED"
     assert run["check"]["offer"]["offer_type"] == "substitute"
+
+
+def test_budget_kill_switch_moves_the_agent_to_fixed_rules():
+    body = TestClient(tool_main.app).post("/pubsub/budget", json=push(
+        {"costAmount": 50.4, "budgetAmount": 50, "currencyCode": "AUD"})).json()
+    assert body == {"result": "ai switched off"}
+    run = run_stockout("C-1002", "CM-100", "T-10")
+    assert run["source"] == "rules"
+    assert "budget reached: 50.40 of 50.00 AUD" in run["note"]
+    assert run["check"]["offer"]["offer_type"] == "substitute"  # customers still get an offer
+
+
+def test_token_ceiling_stops_the_model_and_uses_rules(monkeypatch):
+    monkeypatch.setattr(agent_main, "TOKEN_CEILING", -1)  # the scripted model reports 0 tokens
+    run = run_stockout("C-1002", "CM-100", "T-11")
+    assert run["source"] == "rules"
+    assert "token ceiling" in run["note"]
+
+
+def test_front_door_contract_matches_the_code():
+    """The Apigee OpenAPI file and the agent's StockoutEvent model must describe the same event."""
+    import typing
+    from pathlib import Path
+
+    import yaml
+    spec = yaml.safe_load((Path(__file__).parents[2] / "specialization/apigee/stockout-proxy/apiproxy"
+                           / "resources/oas/stockout-api.yaml").read_text())["components"]["schemas"]["StockoutEvent"]
+    model = agent_main.StockoutEvent.model_fields
+    assert set(spec["required"]) == {name for name, field in model.items() if field.is_required()}
+    assert spec["properties"]["warehouse"]["enum"] == list(typing.get_args(model["warehouse"].annotation))
+    assert spec["properties"]["event_id"]["maxLength"] == 64

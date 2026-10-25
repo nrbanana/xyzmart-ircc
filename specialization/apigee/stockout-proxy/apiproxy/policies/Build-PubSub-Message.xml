@@ -1,0 +1,22 @@
+<!-- Wraps the event the way the Pub/Sub publish API expects, and drops the caller's key. -->
+<AssignMessage name="Build-PubSub-Message">
+  <AssignVariable>
+    <Name>target.url</Name>
+    <Template>https://pubsub.googleapis.com/v1/projects/{organization.name}/topics/stockout-events:publish</Template>
+  </AssignVariable>
+  <AssignVariable>
+    <Name>event.base64</Name>
+    <Template>{encodeBase64(request.content)}</Template>
+  </AssignVariable>
+  <Remove>
+    <Headers>
+      <Header name="x-api-key"/>
+    </Headers>
+  </Remove>
+  <Set>
+    <Payload contentType="application/json" variablePrefix="@" variableSuffix="#">{"messages": [{"data": "@event.base64#"}]}</Payload>
+    <Verb>POST</Verb>
+  </Set>
+  <IgnoreUnresolvedVariables>false</IgnoreUnresolvedVariables>
+  <AssignTo createNew="false" transport="http" type="request"/>
+</AssignMessage>
