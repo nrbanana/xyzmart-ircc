@@ -78,6 +78,15 @@ resource "google_service_account_iam_member" "ci_deploy_acts_as" {
   member             = google_service_account.ci["deploy"].member
 }
 
+# The smoke test calls the new agent revision with an identity token. The deploy identity mints
+# that token for itself, which needs this role on its own account (and on nothing else).
+resource "google_service_account_iam_member" "ci_deploy_id_token" {
+  for_each           = local.ci
+  service_account_id = google_service_account.ci["deploy"].name
+  role               = "roles/iam.serviceAccountOpenIdTokenCreator"
+  member             = google_service_account.ci["deploy"].member
+}
+
 output "github_settings" {
   description = "Repository variables for .github/workflows/release.yml"
   value = var.github_repo == "" ? null : {
