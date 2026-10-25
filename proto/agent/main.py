@@ -117,7 +117,8 @@ app = FastAPI(title="xyzMart recovery agent")
 
 @app.get("/")
 def demo_screen():
-    return FileResponse(HERE / "static" / "index.html")
+    # no-cache: the browser checks for a newer page each time, so a release is seen straight away
+    return FileResponse(HERE / "static" / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/healthz")

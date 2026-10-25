@@ -146,3 +146,7 @@ def test_front_door_contract_matches_the_code():
     assert set(spec["required"]) == {name for name, field in model.items() if field.is_required()}
     assert spec["properties"]["warehouse"]["enum"] == list(typing.get_args(model["warehouse"].annotation))
     assert spec["properties"]["event_id"]["maxLength"] == 64
+
+
+def test_demo_screen_is_never_served_stale_after_a_release():
+    assert TestClient(agent_main.app).get("/").headers["cache-control"] == "no-cache"

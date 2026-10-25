@@ -151,7 +151,7 @@ Edit `proto/.env` and pick one:
 - **You do not:** set `GOOGLE_GENAI_USE_ENTERPRISE=FALSE` and paste a free key from [Google AI Studio](https://aistudio.google.com/apikey) into `GOOGLE_API_KEY`.
 
 ```bash
-make test             # 32 tests, no network or model needed
+make test             # 33 tests, no network or model needed
 make local            # starts the three services, then open http://localhost:8080
 ```
 
@@ -319,7 +319,7 @@ proto/                     the working prototype
     seed_data.json         products, stock and the four sample customers
     catalog.json           product descriptions for search
     seed_cloud.py          loads BigQuery and Vertex AI Search during deploy
-  tests/                   32 tests: rules, stock-out events, kill switch, token ceiling, full agent runs
+  tests/                   33 tests: rules, stock-out events, kill switch, token ceiling, full agent runs
   requirements.txt         pinned versions, one file for all three services
   .env.example             settings, with comments
 specialization/
@@ -354,7 +354,7 @@ make test     # unit tests, no network, under a second
 make evals    # quality checks with the real model and a judge model, about 75 seconds
 ```
 
-**Unit tests.** 32 tests with no network: the business rules (discount caps, in-stock only, Gold-only reservations, approval threshold, idempotency), stock-out events (the last unit selling, duplicate events, events outside the contract never reaching the model), the budget kill switch and token ceiling, the front door contract matching the code, and full agent runs with a scripted model, including one where the model obeys the prompt injection and the tool service still refuses it.
+**Unit tests.** 33 tests with no network: the business rules (discount caps, in-stock only, Gold-only reservations, approval threshold, idempotency), stock-out events (the last unit selling, duplicate events, events outside the contract never reaching the model), the budget kill switch and token ceiling, the front door contract matching the code, and full agent runs with a scripted model, including one where the model obeys the prompt injection and the tool service still refuses it.
 
 **Quality checks** (`specialization/evals/`). The unit tests prove the code; these measure the real agent. Each case is a stock-out event pushed through the same path as production, with the real Gemini model and the tool service running on a throwaway copy of the sample data. A stronger model (Gemini 3.1 Pro) then grades each customer message against the tool results the agent had: this is the "LLM as a judge" step.
 
