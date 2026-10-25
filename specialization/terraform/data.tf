@@ -96,11 +96,12 @@ resource "google_bigquery_dataset_access" "authorize_view" {
 
 # ---- Similar products: Vertex AI Search over the catalogue ----
 # Only offered in global, us or eu locations, not Sydney. Documents are loaded by
-# proto/data/seed_cloud.py.
+# proto/data/seed_cloud.py. Names carry the random suffix: a deleted data store keeps its
+# name for a few hours, which would block an immediate redeploy.
 
 resource "google_discovery_engine_data_store" "catalog" {
   location          = "global"
-  data_store_id     = "ircc-catalog"
+  data_store_id     = "ircc-catalog-${random_id.suffix.hex}"
   display_name      = "xyzMart catalogue"
   industry_vertical = "GENERIC"
   content_config    = "NO_CONTENT"
@@ -109,7 +110,7 @@ resource "google_discovery_engine_data_store" "catalog" {
 }
 
 resource "google_discovery_engine_search_engine" "catalog" {
-  engine_id      = "ircc-catalog"
+  engine_id      = "ircc-catalog-${random_id.suffix.hex}"
   collection_id  = "default_collection"
   location       = "global"
   display_name   = "xyzMart catalogue search"

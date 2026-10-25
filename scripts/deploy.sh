@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Creates everything in Google Cloud and deploys the three services. Safe to run again.
 # Uses your gcloud login (gcloud auth login + gcloud auth application-default login).
+# Set GITHUB_REPO=owner/name to also create keyless login for the release pipeline.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -8,7 +9,7 @@ PROJECT=${PROJECT:-$(gcloud config get-value project 2>/dev/null)}
 REGION=${REGION:-australia-southeast1}
 BILLING=$(gcloud billing projects describe "$PROJECT" --format='value(billingAccountName)' | sed 's#billingAccounts/##')
 TF="terraform -chdir=specialization/terraform"
-VARS=(-var "project_id=$PROJECT" -var "region=$REGION" -var "billing_account=$BILLING")
+VARS=(-var "project_id=$PROJECT" -var "region=$REGION" -var "billing_account=$BILLING" -var "github_repo=${GITHUB_REPO:-}")
 [ -n "$BILLING" ] || { echo "Project $PROJECT has no billing account"; exit 1; }
 
 echo "== 1/4 Infrastructure with Terraform (first run about 15 minutes, mostly Cloud SQL)"
@@ -35,8 +36,12 @@ deploy agent agent & p3=$!
 wait $p1 && wait $p2 && wait $p3
 
 echo "== 3/4 Loading sample customers (BigQuery) and catalogue (Vertex AI Search)"
-.venv/bin/python proto/data/seed_cloud.py "$PROJECT" "$REGION"
+.venv/bin/python proto/data/seed_cloud.py "$PROJECT" "$REGION" "$($TF output -raw search_data_store_id)"
 
 echo "== 4/4 Done"
+if [ -n "${GITHUB_REPO:-}" ]; then
+  echo "   Pipeline settings for $GITHUB_REPO (set each with: gh variable set NAME --body VALUE --repo $GITHUB_REPO):"
+  $TF output -json github_settings | python3 -c 'import json,sys; [print(f"     {k}={v}") for k, v in json.load(sys.stdin).items()]'
+fi
 echo "   Open the demo screen:  make open   (then http://localhost:8080)"
 echo "   Remove everything:     make destroy"

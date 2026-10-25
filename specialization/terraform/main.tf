@@ -59,8 +59,8 @@ resource "random_id" "suffix" {
 locals {
   apis = [
     "aiplatform", "artifactregistry", "bigquery", "billingbudgets", "cloudbuild", "cloudkms",
-    "compute", "discoveryengine", "iam", "pubsub", "run", "secretmanager", "servicenetworking",
-    "sqladmin", "workflowexecutions", "workflows",
+    "compute", "discoveryengine", "iam", "iamcredentials", "pubsub", "run", "secretmanager",
+    "servicenetworking", "sqladmin", "sts", "workflowexecutions", "workflows",
   ]
   # Cloud Run addresses are predictable, so subscriptions and the workflow can refer to them.
   url = { for s in ["agent", "tool-service", "supplier-stub"] :
@@ -79,6 +79,10 @@ output "agent_url" {
 
 output "search_engine_id" {
   value = google_discovery_engine_search_engine.catalog.engine_id
+}
+
+output "search_data_store_id" {
+  value = google_discovery_engine_data_store.catalog.data_store_id
 }
 
 output "build_service_account" {

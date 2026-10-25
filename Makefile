@@ -3,7 +3,7 @@ PYTHON ?= $(firstword $(shell command -v python3.13 python3.12 python3.11) pytho
 VENV := .venv
 PY := $(CURDIR)/$(VENV)/bin/python
 
-.PHONY: setup local test
+.PHONY: setup local test evals
 
 $(VENV)/bin/uvicorn: proto/requirements.txt proto/requirements-dev.txt
 	@$(PYTHON) -c 'import sys; sys.exit(sys.version_info < (3, 11))' || (echo "Needs Python 3.11+, found $$($(PYTHON) --version)"; exit 1)
@@ -25,6 +25,9 @@ local: setup  ## run everything on this laptop (fresh sample data each time)
 
 test: setup  ## unit tests and scripted-model agent runs, no network
 	$(PY) -m pytest proto/tests -q
+
+evals: setup  ## quality checks with the real model and a judge model (needs Gemini access, about 2 minutes)
+	$(PY) specialization/evals/run_evals.py
 
 .PHONY: deploy destroy open cost-check
 
