@@ -76,7 +76,7 @@ Push to main ─► unit tests ─► quality checks ─► agent at 0% ─► s
                                                  any failure: all traffic back to the previous revision
 ```
 
-- **15 golden cases.** 7 real sell-outs, 3 false alarms and 5 trick prompts. They run the real Gemini agent through the same path as production, and Gemini Pro grades each customer message against the tool results.
+- **16 golden cases.** 7 real sell-outs, 3 false alarms and 6 trick prompts (five in customers' order notes, one in a poisoned product name returned by search). They run the real Gemini agent through the same path as production, and Gemini Pro grades each customer message against the tool results.
 - **Hard thresholds:**
 
   | Check | Threshold |

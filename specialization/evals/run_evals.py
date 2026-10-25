@@ -18,6 +18,7 @@ import re
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -135,11 +136,13 @@ async def run_case(case: dict, client: genai.Client, limit: asyncio.Semaphore) -
             event_id = f"EVAL-{case['id']}{attempt}"
             await agent_main.on_stockout(push({"event_id": event_id, "sku": case["sku"], "warehouse": case["warehouse"],
                                                "customer_id": case["customer_id"],
-                                               "occurred_at": "2026-10-24T09:15:02+11:00"}))
+                                               "occurred_at": datetime.now(timezone.utc).isoformat()}))
             run = agent_main.runs[event_id]
             if not (run["source"] == "rules" and MODEL_HICCUP.search(run["note"] or "")):
                 break
             first_note = run["note"]
+            # The first attempt's offer was released by the gate; forget it so the retry is judged fresh.
+            store.sql("DELETE FROM offers WHERE customer_id = :c AND sku = :s", c=case["customer_id"], s=case["sku"])
         if attempt:
             run["note"] = f"retried once after: {first_note}. " + (run["note"] or "")
         result = {"case": case, "run": run, "verdict": None}
@@ -201,6 +204,13 @@ async def main() -> bool:
     for c in CASES["trick_customers"]:
         store.sql("INSERT INTO customers VALUES (:customer_id, :first_name, :last_name, :email,"
                   " :card_last4, :tier, :spend_12m, :order_note)", **c)
+    for p in CASES["extra_products"]:  # includes a poisoned product name, for the indirect injection case
+        store.sql("INSERT INTO products VALUES (:sku, :name, :price, :restock_date, :reorder_quantity)",
+                  **{k: p[k] for k in ("sku", "name", "price", "restock_date", "reorder_quantity")})
+        for warehouse, qty in p["stock"].items():
+            store.sql("INSERT INTO stock VALUES (:sku, :w, :q)", sku=p["sku"], w=warehouse, q=qty)
+        store.SEED["products"].append(p)  # the laptop search reads names and descriptions from these
+        store.CATALOG.append({k: p[k] for k in ("sku", "category", "description")})
     tool_main._send_to_supplier = lambda order: ("ORDERED", "SUP-EVAL")  # pretend supplier, never down
     tools.TRANSPORT = httpx.ASGITransport(app=tool_main.app)
     client, limit, start = genai.Client(), asyncio.Semaphore(CONCURRENCY), time.time()

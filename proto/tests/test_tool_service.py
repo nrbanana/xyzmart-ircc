@@ -12,7 +12,7 @@ def buy(sku, warehouse="SYD"):
 
 def stockout(event_id="WEB-1", **changes):
     return {"event_id": event_id, "sku": "HP-100", "warehouse": "SYD", "customer_id": "C-1002",
-            "occurred_at": "2026-10-24T09:15:02Z"} | changes
+            "occurred_at": "2026-10-24T09:15:02+11:00"} | changes
 
 
 def offer(offer_type="substitute", sku="HP-200", discount=5, sold_out=True):
@@ -41,6 +41,8 @@ def test_same_stockout_event_counts_once():
 def test_stockout_event_outside_the_contract_is_refused():
     assert client.post("/stockout-events", json=stockout(warehouse="PER")).status_code == 422
     assert client.post("/stockout-events", json=stockout(customer_id="")).status_code == 422
+    assert client.post("/stockout-events", json=stockout(sku="X" * 33)).status_code == 422  # longer than the contract allows
+    assert client.post("/stockout-events", json=stockout(occurred_at="2026-10-24T09:15:02")).status_code == 422  # no time zone
 
 
 def test_reset_restores_stock_and_forgets_events():
@@ -151,6 +153,14 @@ def test_priority_reservation_is_gold_only():
     result = check("C-1002", "HP-100", offer("priority_reservation", "HP-100", 10))
     assert result["approved"] is False
     assert result["offer"]["offer_type"] == "back_in_stock_alert"
+
+
+def test_one_discount_per_customer_per_product_per_day():
+    assert check("C-1002", "HP-100", offer(discount=10))["offer"]["discount_percent"] == 10
+    again = check("C-1002", "HP-100", offer(discount=10))
+    assert again["approved"] is False and again["offer"]["discount_percent"] == 0
+    assert "10%" not in again["offer"]["message_to_customer"]  # the safe template, no repeated promise
+    assert check("C-1002", "CM-100", offer(sku="CM-200", discount=10))["offer"]["discount_percent"] == 10  # other product
 
 
 def test_wrong_sold_out_call_is_corrected():

@@ -1,6 +1,7 @@
 """End-to-end runs with the scripted model: stock-out event -> agent -> checked offer."""
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -10,6 +11,8 @@ from fastapi.testclient import TestClient
 import store
 import tools
 
+NOW = lambda: datetime.now(timezone.utc).isoformat()  # noqa: E731
+
 @pytest.fixture(autouse=True)
 def in_process_tool_service(supplier, monkeypatch):
     monkeypatch.setattr(tools, "TRANSPORT", httpx.ASGITransport(app=tool_main.app))
@@ -17,7 +20,7 @@ def in_process_tool_service(supplier, monkeypatch):
 
 def run_stockout(customer_id, sku, event_id, warehouse="SYD"):
     event = {"event_id": event_id, "sku": sku, "warehouse": warehouse, "customer_id": customer_id,
-             "occurred_at": "2026-10-24T09:15:02Z"}
+             "occurred_at": NOW()}
     asyncio.run(agent_main.on_stockout(push(event)))
     return agent_main.runs[event_id]
 
@@ -145,8 +148,33 @@ def test_front_door_contract_matches_the_code():
     model = agent_main.StockoutEvent.model_fields
     assert set(spec["required"]) == {name for name, field in model.items() if field.is_required()}
     assert spec["properties"]["warehouse"]["enum"] == list(typing.get_args(model["warehouse"].annotation))
-    assert spec["properties"]["event_id"]["maxLength"] == 64
+    for field in ("event_id", "sku", "customer_id"):
+        max_length = next(m.max_length for m in model[field].metadata if getattr(m, "max_length", None))
+        assert spec["properties"][field]["maxLength"] == max_length
 
 
 def test_demo_screen_is_never_served_stale_after_a_release():
     assert TestClient(agent_main.app).get("/").headers["cache-control"] == "no-cache"
+
+
+def test_stale_event_gets_no_offer_and_no_order(published):
+    old = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat()
+    body = asyncio.run(agent_main.on_stockout(push({"event_id": "T-12", "sku": "HP-100", "warehouse": "SYD",
+                                                    "customer_id": "C-1001", "occurred_at": old})))
+    assert body["status"] == "ignored" and "stale" in body["reason"]
+    assert "T-12" not in agent_main.runs and published == []
+
+
+def test_event_without_time_zone_is_refused():
+    body = asyncio.run(agent_main.on_stockout(push({"event_id": "T-13", "sku": "HP-100", "warehouse": "SYD",
+                                                    "customer_id": "C-1001", "occurred_at": "2026-10-24T09:15:02"})))
+    assert body["status"] == "ignored"
+
+
+def test_second_sell_out_for_same_customer_and_product_gets_no_second_discount():
+    first = run_stockout("C-1002", "CM-100", "T-14")
+    second = run_stockout("C-1002", "CM-100", "T-15")
+    assert first["check"]["offer"]["discount_percent"] == 10
+    assert second["check"]["offer"]["discount_percent"] == 0
+    assert any("already had a discount" in p for p in second["check"]["problems"])
+    assert second["check"]["offer"]["offer_type"] == "substitute"  # still helped, just not discounted again

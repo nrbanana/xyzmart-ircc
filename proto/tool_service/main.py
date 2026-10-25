@@ -16,12 +16,12 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
 import store
 from shared import cloud
@@ -30,6 +30,7 @@ SUPPLIER_URL = os.getenv("SUPPLIER_URL", "http://localhost:8082")
 SUPPLIER_API_KEY = os.getenv("SUPPLIER_API_KEY", "")  # from Secret Manager in Google Cloud
 WORKFLOW = os.getenv("SUPPLIER_WORKFLOW", "")  # projects/.../locations/.../workflows/supplier-order
 APPROVAL_THRESHOLD = 50
+OFFER_LIMIT_HOURS = 24  # one discounted offer per customer per product per day: stops discount farming
 DISCOUNT_CAP = {"Gold": 15, "Silver": 10, "Bronze": 5}
 ALLOWED_OFFERS = {
     "Gold": {"priority_reservation", "substitute", "back_in_stock_alert"},
@@ -57,10 +58,10 @@ def healthz():
 class StockoutEvent(BaseModel):
     """A purchase found no stock. The contract is written out in the README, "Stock-out event contract"."""
     event_id: str = Field(min_length=1, max_length=64)
-    sku: str = Field(min_length=1)
+    sku: str = Field(min_length=1, max_length=32)
     warehouse: Literal["SYD", "MEL"]
-    customer_id: str = Field(min_length=1)
-    occurred_at: datetime
+    customer_id: str = Field(min_length=1, max_length=64)
+    occurred_at: AwareDatetime
 
 
 @app.post("/stockout-events")
@@ -265,7 +266,8 @@ class OfferCheck(BaseModel):
 
 @app.post("/offers/check")
 def check_offer(req: OfferCheck):
-    """Final gate before an offer reaches a customer. Fixes anything outside the rules."""
+    """Final gate before an offer reaches a customer. Fixes anything outside the rules, then records the
+    released offer so the same customer gets at most one discount per product per day."""
     loyalty = store.get_loyalty(req.customer_id)
     product = store.get_product(req.sold_out_sku)
     if not loyalty or not product:
@@ -298,6 +300,10 @@ def check_offer(req: OfferCheck):
     if not 0 <= offer.discount_percent <= cap:
         problems.append(f"discount {offer.discount_percent}% is outside 0-{cap}% for {tier}")
         offer.discount_percent = max(0, min(offer.discount_percent, cap))
+    since = (datetime.now(timezone.utc) - timedelta(hours=OFFER_LIMIT_HOURS)).isoformat()
+    if offer.discount_percent and store.discounted_since(req.customer_id, req.sold_out_sku, since):
+        problems.append(f"already had a discount for this product in the last {OFFER_LIMIT_HOURS} hours")
+        offer.discount_percent = 0
 
     if problems:
         # The model's wording may repeat the bad promise, so replace it with a safe template.
@@ -308,6 +314,7 @@ def check_offer(req: OfferCheck):
             "back_in_stock_alert": f"we will tell you as soon as {name} is back in stock",
             "ship_from_other_warehouse": f"good news: {name} is in stock at another warehouse and will ship from there",
         }[offer.offer_type] + (f", with {offer.discount_percent}% off." if offer.discount_percent else ".")
+    store.save_offer(req.customer_id, req.sold_out_sku, offer.discount_percent)
     return {"approved": not problems, "problems": problems, "tier": tier,
             "discount_cap": cap, "offer": offer.model_dump()}
 

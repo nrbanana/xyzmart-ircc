@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from shared.cloud import RUN_MODE, PROJECT, google_api
@@ -31,6 +32,7 @@ SCHEMA = [
            sku TEXT, quantity INTEGER, priority TEXT, status TEXT, supplier_ref TEXT, approval_url TEXT,
            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
     "CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, value TEXT)",
+    "CREATE TABLE IF NOT EXISTS offers (customer_id TEXT, sku TEXT, discount_percent INTEGER, sent_at TEXT)",
     """CREATE TABLE IF NOT EXISTS stockout_events (event_id TEXT PRIMARY KEY, sku TEXT, warehouse TEXT,
            customer_id TEXT, occurred_at TEXT, received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
 ]
@@ -66,7 +68,7 @@ def init_db(reset: bool = False) -> None:
     for statement in SCHEMA + (LOCAL_CUSTOMER_SCHEMA if RUN_MODE == "local" else []):
         sql(statement)
     if reset:
-        for table in ("settings", "stockout_events", "supplier_orders", "stock", "products"):
+        for table in ("offers", "settings", "stockout_events", "supplier_orders", "stock", "products"):
             sql(f"DELETE FROM {table}")
     if sql("SELECT COUNT(*) AS n FROM products")[0]["n"]:
         return
@@ -116,6 +118,18 @@ def get_setting(name: str) -> str:
 def set_setting(name: str, value: str) -> None:
     sql("INSERT INTO settings (name, value) VALUES (:name, :value)"
         " ON CONFLICT (name) DO UPDATE SET value = excluded.value", name=name, value=value)
+
+
+# ---- offers released by the gate (one discount per customer per product per day) ----
+
+def discounted_since(customer_id: str, sku: str, since: str) -> bool:
+    return bool(sql("SELECT 1 AS hit FROM offers WHERE customer_id = :c AND sku = :s AND discount_percent > 0"
+                    " AND sent_at > :since", c=customer_id, s=sku, since=since))
+
+
+def save_offer(customer_id: str, sku: str, discount_percent: int) -> None:
+    sql("INSERT INTO offers VALUES (:c, :s, :d, :t)", c=customer_id, s=sku, d=discount_percent,
+        t=datetime.now(timezone.utc).isoformat())  # ISO text sorts by time in SQLite and Postgres alike
 
 
 # ---- supplier orders -------------------------------------------------------

@@ -10,7 +10,7 @@ import json
 import os
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse  # noqa: E402
 from google.adk.runners import Runner  # noqa: E402
 from google.adk.sessions import InMemorySessionService  # noqa: E402
 from google.genai import types  # noqa: E402
-from pydantic import BaseModel, Field, ValidationError  # noqa: E402
+from pydantic import AwareDatetime, BaseModel, Field, ValidationError  # noqa: E402
 
 import agent  # noqa: E402
 import rules  # noqa: E402
@@ -35,12 +35,18 @@ from shared import cloud  # noqa: E402
 SUPPLIER_URL = os.getenv("SUPPLIER_URL", "http://localhost:8082")
 AGENT_TIMEOUT_SECONDS = 60
 TOKEN_CEILING = int(os.getenv("TOKEN_CEILING", "8000"))  # a normal decision uses about 5,000
+MAX_EVENT_AGE_MINUTES = 30  # an older stock-out is stale: the customer has moved on
 
 sessions = InMemorySessionService()
 runner = Runner(agent=agent.root_agent, app_name="ircc", session_service=sessions)
 offers: list[dict] = []
 runs: dict[str, dict] = {}  # event_id -> latest delivery of that event, shown on the demo screen
 switches = {"supplier_down": False}  # demo switch; the AI on/off setting lives in the tool service database
+
+
+def log(message: str, **fields) -> None:
+    """One structured line. Cloud Run sends JSON lines to Cloud Logging as searchable fields."""
+    print(json.dumps({"message": message, **fields}), flush=True)
 
 
 def required_tools(offer: dict) -> set[str]:
@@ -80,6 +86,7 @@ async def handle_stockout(stockout: dict, run: dict) -> None:
         return
     if record["duplicate"]:
         run.update(status="skipped", note="Duplicate event id, already handled. No second order.")
+        log("event_skipped", event_id=stockout["event_id"], reason="duplicate")
         return
     run["status"] = "running"
     try:
@@ -105,8 +112,8 @@ async def handle_stockout(stockout: dict, run: dict) -> None:
     run.update(check=check, status="done", seconds=round(time.monotonic() - run["started"], 2))
     # One structured line per decision. In Google Cloud, log-based metrics read it for the speed,
     # token and fallback targets in specialization/finops/slo.yaml.
-    print(json.dumps({"message": "decision", "event_id": stockout["event_id"], "source": run["source"],
-                      "tokens": run["tokens"], "seconds": run["seconds"], "approved": check["approved"]}), flush=True)
+    log("decision", event_id=stockout["event_id"], source=run["source"], tokens=run["tokens"], seconds=run["seconds"],
+        approved=check["approved"], problems=check["problems"], note=run["note"])
     sent = {"event_id": stockout["event_id"], "customer_id": stockout["customer_id"], **check["offer"]}
     offers.append(sent)
     cloud.publish("customer-offers", sent)
@@ -129,19 +136,26 @@ def healthz():
 class StockoutEvent(BaseModel):
     """Checked here so a bad message is dropped before it reaches the model. Contract: README, "Stock-out event"."""
     event_id: str = Field(min_length=1, max_length=64)
-    sku: str = Field(min_length=1)
+    sku: str = Field(min_length=1, max_length=32)
     warehouse: Literal["SYD", "MEL"]
-    customer_id: str = Field(min_length=1)
-    occurred_at: datetime
+    customer_id: str = Field(min_length=1, max_length=64)
+    occurred_at: AwareDatetime  # must carry a time zone
 
 
 @app.post("/pubsub/stockouts")
 async def on_stockout(envelope: dict):
     """Pub/Sub push endpoint for stock-out events. Always answers 2xx, so Pub/Sub stops retrying."""
     try:
-        stockout = StockoutEvent(**cloud.read_push(envelope)).model_dump(mode="json")
+        event = StockoutEvent(**cloud.read_push(envelope))
     except (ValidationError, KeyError, ValueError, TypeError) as e:
+        log("event_ignored", severity="WARNING", reason=str(e)[:200])
         return {"status": "ignored", "reason": str(e)[:200]}
+    age = datetime.now(timezone.utc) - event.occurred_at
+    if age > timedelta(minutes=MAX_EVENT_AGE_MINUTES):  # a delayed or replayed event: no offer, no order
+        reason = f"stale: the purchase failed {int(age.total_seconds() // 60)} minutes ago (limit {MAX_EVENT_AGE_MINUTES})"
+        log("event_ignored", severity="WARNING", event_id=event.event_id, reason=reason)
+        return {"status": "ignored", "reason": reason}
+    stockout = event.model_dump(mode="json")
     run = {"event": stockout, "status": "received", "steps": [], "tokens": 0, "source": None, "note": None,
            "started": time.monotonic()}
     runs[stockout["event_id"]] = run

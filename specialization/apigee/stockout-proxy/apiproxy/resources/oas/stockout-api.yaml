@@ -57,6 +57,7 @@ components:
         sku:
           type: string
           minLength: 1
+          maxLength: 32
           description: The product the customer tried to buy
         warehouse:
           type: string
@@ -65,8 +66,9 @@ components:
         customer_id:
           type: string
           minLength: 1
+          maxLength: 64
           description: The customer, so the agent knows who to make an offer to
         occurred_at:
           type: string
           format: date-time
-          description: When the purchase failed, ISO 8601 with a time zone
+          description: When the purchase failed, ISO 8601 with a time zone. Older than 30 minutes is ignored as stale.
