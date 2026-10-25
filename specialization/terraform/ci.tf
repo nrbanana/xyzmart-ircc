@@ -27,8 +27,9 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   workload_identity_pool_id          = google_iam_workload_identity_pool.github["on"].workload_identity_pool_id
   workload_identity_pool_provider_id = "github"
   attribute_mapping = {
-    "google.subject"       = "assertion.sub" # repo:<owner/name>:ref:refs/heads/<branch>
+    "google.subject"       = "assertion.sub"
     "attribute.repository" = "assertion.repository"
+    "attribute.ref"        = "assertion.ref" # refs/heads/<branch>
   }
   attribute_condition = "assertion.repository == '${var.github_repo}'"
   oidc {
@@ -46,8 +47,10 @@ resource "google_service_account" "ci" {
 locals {
   pool = var.github_repo == "" ? "" : google_iam_workload_identity_pool.github["on"].name
   ci_users = var.github_repo == "" ? {} : {
-    evals  = "principalSet://iam.googleapis.com/${local.pool}/attribute.repository/${var.github_repo}"
-    deploy = "principal://iam.googleapis.com/${local.pool}/subject/repo:${var.github_repo}:ref:refs/heads/main"
+    evals = "principalSet://iam.googleapis.com/${local.pool}/attribute.repository/${var.github_repo}"
+    # By branch attribute, not by subject: GitHub's subject format can include account and repository
+    # numbers. The provider condition above already limits the pool to this repository.
+    deploy = "principalSet://iam.googleapis.com/${local.pool}/attribute.ref/refs/heads/main"
   }
 }
 
@@ -75,15 +78,6 @@ resource "google_service_account_iam_member" "ci_deploy_acts_as" {
   for_each           = var.github_repo == "" ? toset([]) : toset(["agent", "tool-service", "supplier-stub", "build"])
   service_account_id = google_service_account.sa[each.key].name
   role               = "roles/iam.serviceAccountUser"
-  member             = google_service_account.ci["deploy"].member
-}
-
-# The smoke test calls the new agent revision with an identity token. The deploy identity mints
-# that token for itself, which needs this role on its own account (and on nothing else).
-resource "google_service_account_iam_member" "ci_deploy_id_token" {
-  for_each           = local.ci
-  service_account_id = google_service_account.ci["deploy"].name
-  role               = "roles/iam.serviceAccountOpenIdTokenCreator"
   member             = google_service_account.ci["deploy"].member
 }
 
