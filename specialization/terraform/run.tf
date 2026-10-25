@@ -51,6 +51,8 @@ resource "google_cloud_run_v2_service" "svc" {
   location            = var.region
   ingress             = each.value.ingress
   deletion_protection = false
+  # A fixed token audience, so the pipeline can call a new revision on its own tagged address.
+  custom_audiences = each.key == "agent" ? ["ircc-agent"] : null
 
   template {
     service_account = google_service_account.sa[each.key].email

@@ -3,7 +3,7 @@
 Run by `make deploy` with your own gcloud login. Cloud SQL is not seeded here: it has a
 private address only, so the tool service seeds it on first start.
 
-Usage: python seed_cloud.py PROJECT_ID REGION
+Usage: python seed_cloud.py PROJECT_ID REGION DATA_STORE_ID
 """
 
 import json
@@ -39,7 +39,7 @@ def wait(session: AuthorizedSession, operation: dict, base: str) -> None:
         sys.exit(f"Vertex AI Search operation failed: {operation['error']}")
 
 
-def main(project: str, region: str) -> None:
+def main(project: str, region: str, data_store: str) -> None:
     credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
     session = AuthorizedSession(credentials)
 
@@ -53,7 +53,7 @@ def main(project: str, region: str) -> None:
     r.raise_for_status()
     print(f"BigQuery: loaded {len(SEED['customers'])} customers")
 
-    store = SEARCH.format(p=project) + "/dataStores/ircc-catalog"
+    store = SEARCH.format(p=project) + f"/dataStores/{data_store}"
     r = session.patch(f"{store}/schemas/default_schema", json={"jsonSchema": json.dumps(SEARCH_SCHEMA)})
     r.raise_for_status()
     wait(session, r.json(), store)
@@ -68,4 +68,4 @@ def main(project: str, region: str) -> None:
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:3])
+    main(*sys.argv[1:4])
