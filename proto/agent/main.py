@@ -87,7 +87,7 @@ async def handle_stockout(stockout: dict, run: dict) -> None:
             raise ValueError(f"agent skipped {', '.join(sorted(skipped))}")
         run["source"] = "ai"
     except Exception as e:  # Gemini down, slow, or invalid output: fall back to fixed rules
-        run.update(source="rules", note=f"Rules fallback used: {e}")
+        run.update(source="rules", note=f"Rules fallback used: {str(e) or type(e).__name__}")  # a timeout has no message
         offer = await rules.decide(stockout, log=lambda tool, args, result: run["steps"].append(
             {"tool": tool, "input": args, "output": result}))
 

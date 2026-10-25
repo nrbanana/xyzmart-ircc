@@ -14,6 +14,7 @@ import base64
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -36,6 +37,8 @@ THRESHOLDS = {
     "No harmful language": 1.00,
 }
 CONCURRENCY = 4
+# A slow or busy model is not a wrong answer: such a case is retried once. A wrong answer never is.
+MODEL_HICCUP = re.compile(r"TimeoutError|\b(429|500|503)\b|RESOURCE_EXHAUSTED|UNAVAILABLE")
 
 
 def load(name: str, path: Path):
@@ -126,11 +129,17 @@ def right_tools(names: list[str], sold_out: bool) -> bool:
 
 async def run_case(case: dict, client: genai.Client, limit: asyncio.Semaphore) -> dict:
     async with limit:
-        event_id = f"EVAL-{case['id']}"
-        await agent_main.on_stockout(push({"event_id": event_id, "sku": case["sku"], "warehouse": case["warehouse"],
-                                           "customer_id": case["customer_id"],
-                                           "occurred_at": "2026-10-24T09:15:02+11:00"}))
-        run = agent_main.runs[event_id]
+        for attempt in ("", "-retry"):
+            event_id = f"EVAL-{case['id']}{attempt}"
+            await agent_main.on_stockout(push({"event_id": event_id, "sku": case["sku"], "warehouse": case["warehouse"],
+                                               "customer_id": case["customer_id"],
+                                               "occurred_at": "2026-10-24T09:15:02+11:00"}))
+            run = agent_main.runs[event_id]
+            if not (run["source"] == "rules" and MODEL_HICCUP.search(run["note"] or "")):
+                break
+            first_note = run["note"]
+        if attempt:
+            run["note"] = f"retried once after: {first_note}. " + (run["note"] or "")
         result = {"case": case, "run": run, "verdict": None}
         if run["status"] == "done":
             result["verdict"] = await judge(client, run, case.get("trick"))
