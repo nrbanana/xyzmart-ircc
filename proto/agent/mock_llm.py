@@ -24,23 +24,23 @@ class MockLlm(BaseLlm):
     async def generate_content_async(
         self, llm_request: LlmRequest, stream: bool = False
     ) -> AsyncGenerator[LlmResponse, None]:
-        alert, results = {}, {}
+        stockout, results = {}, {}
         for content in llm_request.contents:
             for part in content.parts or []:
-                if part.text and part.text.strip().startswith("{") and not alert:
-                    alert = json.loads(part.text)
+                if part.text and part.text.strip().startswith("{") and not stockout:
+                    stockout = json.loads(part.text)
                 if part.function_response:
                     results[part.function_response.name] = part.function_response.response
 
         stock = results.get("check_stock", {})
         sold_out = stock.get("available", 0) == 0
         if not stock:
-            parts = [_call("check_stock", sku=alert["sku"]),
-                     _call("check_loyalty", customer_id=alert["customer_id"])]
+            parts = [_call("check_stock", sku=stockout["sku"]),
+                     _call("check_loyalty", customer_id=stockout["customer_id"])]
         elif sold_out and "find_similar_products" not in results:
-            parts = [_call("find_similar_products", query=stock.get("name", ""), exclude_sku=alert["sku"])]
+            parts = [_call("find_similar_products", query=stock.get("name", ""), exclude_sku=stockout["sku"])]
         elif sold_out and "order_from_supplier" not in results:
-            parts = [_call("order_from_supplier", sku=alert["sku"],
+            parts = [_call("order_from_supplier", sku=stockout["sku"],
                            quantity=stock.get("suggested_reorder_quantity", 10),
                            priority="urgent" if results["check_loyalty"].get("tier") == "Gold" else "normal")]
         else:

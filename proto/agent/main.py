@@ -1,16 +1,17 @@
-"""Agent service: receives out-of-stock alerts, runs the agent, sends offers, serves the demo screen.
+"""Agent service: receives stock-out events, runs the agent, sends offers, serves the demo screen.
 
 Message flow (Pub/Sub in Google Cloud, direct HTTP on the laptop):
-  demo "Customer buys"  -> stock-events     -> tool service (applies sale, detects sell-out)
-  tool service          -> sold-out-alerts  -> this service, /pubsub/alerts (runs the agent)
-  this service          -> customer-offers  -> customer channels (here: the demo screen)
+  web shop (here: the demo screen) -> stockout-events -> this service, /pubsub/stockouts (runs the agent)
+  this service                     -> customer-offers -> customer channels (here: the demo screen)
 """
 
 import asyncio
 import json
 import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 
@@ -23,7 +24,7 @@ from fastapi.responses import FileResponse  # noqa: E402
 from google.adk.runners import Runner  # noqa: E402
 from google.adk.sessions import InMemorySessionService  # noqa: E402
 from google.genai import types  # noqa: E402
-from pydantic import BaseModel  # noqa: E402
+from pydantic import BaseModel, Field, ValidationError  # noqa: E402
 
 import agent  # noqa: E402
 import rules  # noqa: E402
@@ -36,8 +37,7 @@ AGENT_TIMEOUT_SECONDS = 60
 sessions = InMemorySessionService()
 runner = Runner(agent=agent.root_agent, app_name="ircc", session_service=sessions)
 offers: list[dict] = []
-runs: dict[str, dict] = {}  # alert_id -> latest delivery of that alert, shown on the demo screen
-handled_alert_ids: set[str] = set()
+runs: dict[str, dict] = {}  # event_id -> latest delivery of that event, shown on the demo screen
 switches = {"ai_off": False, "supplier_down": False}
 
 
@@ -46,11 +46,11 @@ def required_tools(offer: dict) -> set[str]:
     return {"check_stock", "check_loyalty"} | ({"order_from_supplier"} if offer["sold_out"] else set())
 
 
-async def run_agent(alert: dict, run: dict) -> agent.Offer:
-    """One agent run. Each alert gets its own session: its working memory."""
+async def run_agent(stockout: dict, run: dict) -> agent.Offer:
+    """One agent run. Each stock-out event gets its own session: its working memory."""
     session = await sessions.create_session(app_name="ircc", user_id="ircc",
-                                            state={"alert_id": alert["alert_id"]})
-    message = types.Content(role="user", parts=[types.Part(text=json.dumps(alert))])
+                                            state={"event_id": stockout["event_id"]})
+    message = types.Content(role="user", parts=[types.Part(text=json.dumps(stockout))])
     open_calls = {}
     async for event in runner.run_async(user_id="ircc", session_id=session.id, new_message=message):
         if event.usage_metadata and event.usage_metadata.total_token_count:
@@ -69,33 +69,36 @@ async def run_agent(alert: dict, run: dict) -> agent.Offer:
     return agent.Offer.model_validate_json(result) if isinstance(result, str) else agent.Offer.model_validate(result)
 
 
-async def handle_alert(alert: dict, run: dict) -> None:
-    if alert["alert_id"] in handled_alert_ids:
-        run.update(status="skipped", note="Duplicate alert id, already handled. No second order.")
+async def handle_stockout(stockout: dict, run: dict) -> None:
+    record = await tools.call_tool_service("POST", "/stockout-events", json=stockout)
+    if "error" in record:
+        run.update(status="error", note=f"Could not record the event: {record['error']}")
         return
-    handled_alert_ids.add(alert["alert_id"])
+    if record["duplicate"]:
+        run.update(status="skipped", note="Duplicate event id, already handled. No second order.")
+        return
     run["status"] = "running"
     try:
         if switches["ai_off"]:
             raise RuntimeError("AI switched off")
-        offer = (await asyncio.wait_for(run_agent(alert, run), AGENT_TIMEOUT_SECONDS)).model_dump()
+        offer = (await asyncio.wait_for(run_agent(stockout, run), AGENT_TIMEOUT_SECONDS)).model_dump()
         skipped = required_tools(offer) - {step["tool"] for step in run["steps"]}
         if skipped:
             raise ValueError(f"agent skipped {', '.join(sorted(skipped))}")
         run["source"] = "ai"
     except Exception as e:  # Gemini down, slow, or invalid output: fall back to fixed rules
         run.update(source="rules", note=f"Rules fallback used: {e}")
-        offer = await rules.decide(alert, log=lambda tool, args, result: run["steps"].append(
+        offer = await rules.decide(stockout, log=lambda tool, args, result: run["steps"].append(
             {"tool": tool, "input": args, "output": result}))
 
     run["proposed_offer"] = offer
     check = await tools.call_tool_service("POST", "/offers/check", json={
-        "customer_id": alert["customer_id"], "sold_out_sku": alert["sku"], "offer": offer})
+        "customer_id": stockout["customer_id"], "sold_out_sku": stockout["sku"], "offer": offer})
     if "error" in check:
         run.update(status="error", note=f"Offer check failed: {check['error']}")
         return
     run.update(check=check, status="done")
-    sent = {"alert_id": alert["alert_id"], "customer_id": alert["customer_id"], **check["offer"]}
+    sent = {"event_id": stockout["event_id"], "customer_id": stockout["customer_id"], **check["offer"]}
     offers.append(sent)
     cloud.publish("customer-offers", sent)
 
@@ -113,18 +116,26 @@ def healthz():
     return {"ok": True}
 
 
-@app.post("/pubsub/alerts")
-async def on_alert(envelope: dict):
-    """Pub/Sub push endpoint for out-of-stock alerts. Answers 2xx once handled, so Pub/Sub stops retrying."""
+class StockoutEvent(BaseModel):
+    """Checked here so a bad message is dropped before it reaches the model. Contract: README, "Stock-out event"."""
+    event_id: str = Field(min_length=1, max_length=64)
+    sku: str = Field(min_length=1)
+    warehouse: Literal["SYD", "MEL"]
+    customer_id: str = Field(min_length=1)
+    occurred_at: datetime
+
+
+@app.post("/pubsub/stockouts")
+async def on_stockout(envelope: dict):
+    """Pub/Sub push endpoint for stock-out events. Always answers 2xx, so Pub/Sub stops retrying."""
     try:
-        alert = cloud.read_push(envelope)
-        alert = {k: alert[k] for k in ("alert_id", "sku", "warehouse", "customer_id")}
-    except (KeyError, ValueError, TypeError) as e:
-        return {"ignored": str(e)[:200]}
-    run = {"alert": alert, "status": "received", "steps": [], "tokens": 0, "source": None, "note": None}
-    runs[alert["alert_id"]] = run
+        stockout = StockoutEvent(**cloud.read_push(envelope)).model_dump(mode="json")
+    except (ValidationError, KeyError, ValueError, TypeError) as e:
+        return {"status": "ignored", "reason": str(e)[:200]}
+    run = {"event": stockout, "status": "received", "steps": [], "tokens": 0, "source": None, "note": None}
+    runs[stockout["event_id"]] = run
     try:
-        await handle_alert(alert, run)
+        await handle_stockout(stockout, run)
     except Exception as e:
         run.update(status="error", note=str(e)[:300])
     return {"status": run["status"]}
@@ -139,31 +150,31 @@ class Purchase(BaseModel):
 
 
 @app.post("/api/purchase")
-def purchase(body: Purchase):
-    """A customer buys one unit online. This becomes one event on the live stock feed."""
-    event = {"event_id": "EV-" + uuid.uuid4().hex[:8].upper(), "type": "sale", "quantity": 1, **body.model_dump()}
-    cloud.publish("stock-events", event)
-    return event
+async def purchase(body: Purchase):
+    """The demo screen plays the web shop. If the purchase finds no stock, it publishes a stock-out event,
+    as xyzMart's web shop would in production."""
+    sale = await tools.call_tool_service("POST", "/demo/purchase", json={"sku": body.sku, "warehouse": body.warehouse})
+    if sale.get("result") != "out_of_stock":
+        return sale
+    stockout = {"event_id": "WEB-" + uuid.uuid4().hex[:8].upper(), **body.model_dump(),
+                "occurred_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    cloud.publish("stockout-events", stockout)
+    return sale | {"event": stockout}
 
 
-@app.get("/api/events/{event_id}")
-async def get_event(event_id: str):
-    return await tools.call_tool_service("GET", f"/stock-events/{event_id}")
+@app.get("/api/runs/{event_id}")
+def get_run(event_id: str):
+    if event_id not in runs:
+        raise HTTPException(404, "Event not received yet")
+    return runs[event_id]
 
 
-@app.get("/api/runs/{alert_id}")
-def get_run(alert_id: str):
-    if alert_id not in runs:
-        raise HTTPException(404, "Alert not received yet")
-    return runs[alert_id]
-
-
-@app.post("/api/alerts/{alert_id}/redeliver")
-def redeliver(alert_id: str):
-    """Publish the same alert again, as Pub/Sub sometimes does."""
-    if alert_id not in runs:
+@app.post("/api/stockouts/{event_id}/redeliver")
+def redeliver(event_id: str):
+    """Publish the same stock-out event again, as Pub/Sub sometimes does."""
+    if event_id not in runs:
         raise HTTPException(404)
-    cloud.publish("sold-out-alerts", runs[alert_id]["alert"])
+    cloud.publish("stockout-events", runs[event_id]["event"])
     return {"ok": True}
 
 
@@ -181,7 +192,6 @@ async def demo_data():
 async def reset():
     offers.clear()
     runs.clear()
-    handled_alert_ids.clear()
     return await tools.call_tool_service("POST", "/admin/reset")
 
 

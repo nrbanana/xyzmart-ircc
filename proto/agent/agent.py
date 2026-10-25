@@ -18,11 +18,11 @@ from pydantic import BaseModel, Field
 import tools
 
 INSTRUCTION = """\
-You are the xyzMart inventory recovery agent. You receive an out-of-stock alert as JSON:
-{"alert_id", "sku", "warehouse", "customer_id"}. A customer tried to buy the product from
-that warehouse and it had none left.
+You are the xyzMart inventory recovery agent. You receive a stock-out event as JSON:
+{"event_id", "sku", "warehouse", "customer_id", "occurred_at"}. A customer tried to buy the
+product from that warehouse and it had none left.
 
-Never answer from the alert alone. Your first reply must always be tool calls.
+Never answer from the event alone. Your first reply must always be tool calls.
 
 Steps:
 1. Call check_stock for the sku and check_loyalty for the customer.
@@ -78,7 +78,7 @@ def drop_personal_data(tool: BaseTool, args: dict, tool_context: ToolContext,
 def look_before_answering(callback_context: Context, llm_request: LlmRequest) -> None:
     """On the first turn, Gemini must call check_stock or check_loyalty instead of answering.
 
-    Without this, about 1 run in 12 answered straight from the alert with no tool data.
+    Without this, about 1 run in 12 answered straight from the event with no tool data.
     """
     if not any(part.function_response for content in llm_request.contents for part in content.parts or []):
         llm_request.config.tool_config = types.ToolConfig(function_calling_config=types.FunctionCallingConfig(

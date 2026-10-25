@@ -26,8 +26,7 @@ log = logging.getLogger("cloud")
 
 # Laptop only: where a push subscription would deliver each topic.
 LOCAL_SUBSCRIBERS = {
-    "stock-events": os.getenv("TOOL_SERVICE_URL", "http://localhost:8081") + "/pubsub/stock-events",
-    "sold-out-alerts": os.getenv("AGENT_URL", "http://localhost:8080") + "/pubsub/alerts",
+    "stockout-events": os.getenv("AGENT_URL", "http://localhost:8080") + "/pubsub/stockouts",
     "customer-offers": None,  # nobody subscribes on the laptop; the demo screen shows offers
 }
 

@@ -78,6 +78,6 @@ async def order_from_supplier(sku: str, quantity: int, priority: str, tool_conte
         quantity: Units to order. Use the suggested reorder quantity from check_stock.
         priority: "urgent" for Gold customers, otherwise "normal".
     """
-    # One order per alert and product, however many times the model or a retry calls this.
-    key = f"{tool_context.state['alert_id']}:{sku}"
+    # One order per stock-out event and product, however many times the model or a retry calls this.
+    key = f"{tool_context.state['event_id']}:{sku}"
     return await submit_order(sku, quantity, priority, key)

@@ -1,15 +1,18 @@
-"""The business rules and sell-out detection live in the tool service, so they are tested here."""
+"""The business rules and duplicate checks live in the tool service, so they are tested here."""
 
-from conftest import push, tool_main
+from conftest import tool_main
 from fastapi.testclient import TestClient
 
 client = TestClient(tool_main.app)
 
 
-def sale(sku, warehouse="SYD", event_id="EV-1", customer_id="C-1001"):
-    return client.post("/pubsub/stock-events", json=push({
-        "event_id": event_id, "type": "sale", "sku": sku, "warehouse": warehouse,
-        "quantity": 1, "customer_id": customer_id})).json()
+def buy(sku, warehouse="SYD"):
+    return client.post("/demo/purchase", json={"sku": sku, "warehouse": warehouse}).json()
+
+
+def stockout(event_id="WEB-1", **changes):
+    return {"event_id": event_id, "sku": "HP-100", "warehouse": "SYD", "customer_id": "C-1002",
+            "occurred_at": "2026-10-24T09:15:02Z"} | changes
 
 
 def offer(offer_type="substitute", sku="HP-200", discount=5, sold_out=True):
@@ -22,35 +25,30 @@ def check(customer_id, sold_out_sku, proposed):
                                               "sold_out_sku": sold_out_sku, "offer": proposed}).json()
 
 
-# ---- live stock feed -------------------------------------------------------
+# ---- stock-out events and the pretend web shop ----------------------------
 
-def test_sale_with_stock_reduces_stock_and_raises_no_alert(published):
-    assert sale("SN-100")["result"] == "sold"  # the last unit in SYD
+def test_purchase_with_stock_takes_the_last_unit():
+    assert buy("SN-100")["result"] == "sold"  # the last unit in SYD
     assert client.get("/stock/SN-100").json()["available"] == 0
-    assert published == []
+    assert buy("SN-100")["result"] == "out_of_stock"
 
 
-def test_sale_with_no_stock_raises_alert(published):
-    body = sale("HP-100", event_id="EV-2", customer_id="C-1002")
-    assert body["result"] == "out_of_stock"
-    assert published == [("sold-out-alerts", {"alert_id": "ALERT-EV-2", "sku": "HP-100",
-                                              "warehouse": "SYD", "customer_id": "C-1002"})]
+def test_same_stockout_event_counts_once():
+    assert client.post("/stockout-events", json=stockout()).json() == {"duplicate": False}
+    assert client.post("/stockout-events", json=stockout()).json() == {"duplicate": True}
 
 
-def test_same_event_twice_is_applied_once(published):
-    sale("SN-100", event_id="EV-3")
-    assert sale("SN-100", event_id="EV-3") == {"duplicate": True}
-    assert published == []  # second delivery did not see "no stock" and alert
+def test_stockout_event_outside_the_contract_is_refused():
+    assert client.post("/stockout-events", json=stockout(warehouse="PER")).status_code == 422
+    assert client.post("/stockout-events", json=stockout(customer_id="")).status_code == 422
 
 
-def test_bad_message_is_acknowledged_not_retried():
-    assert "ignored" in client.post("/pubsub/stock-events", json=push({"nonsense": 1})).json()
-
-
-def test_reset_restores_stock():
-    sale("SN-100")
+def test_reset_restores_stock_and_forgets_events():
+    buy("SN-100")
+    client.post("/stockout-events", json=stockout())
     client.post("/admin/reset")
     assert client.get("/stock/SN-100").json()["available"] == 1
+    assert client.post("/stockout-events", json=stockout()).json() == {"duplicate": False}
 
 
 # ---- tools -----------------------------------------------------------------

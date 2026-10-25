@@ -66,7 +66,7 @@
 <body>
 <header>
   <h1>xyzMart inventory recovery agent</h1>
-  <p>Every online purchase is an event on the live stock feed. When a purchase cannot be filled, the agent checks whether the item is really sold out, orders more from the supplier, and sends the customer an offer.</p>
+  <p>When an online purchase finds no stock, the web shop sends a stock-out event. The agent checks whether the item is really sold out, orders more from the supplier, and sends the customer an offer.</p>
 </header>
 <main>
   <div class="stack">
@@ -79,7 +79,7 @@
       <label for="warehouse">Ships from</label>
       <select id="warehouse"><option>SYD</option><option>MEL</option></select>
       <button class="primary" id="buy">Customer buys</button>
-      <button id="again" disabled style="margin-top:8px">Send the same alert again</button>
+      <button id="again" disabled style="margin-top:8px">Send the same event again</button>
       <p class="hint">Try: <b>SN-100 from SYD</b> twice (last unit sells, then it is sold out) ·
         <b>HP-300 from SYD</b> (false alarm: MEL has stock) · <b>Max</b> (his order note is a trick)</p>
     </section>
@@ -132,7 +132,7 @@ const api = async (path, body) => {
 };
 const OFFER_NAMES = {priority_reservation: "Priority reservation", substitute: "In-stock alternative",
                      back_in_stock_alert: "Back-in-stock alert", ship_from_other_warehouse: "Ship from another warehouse"};
-let lastAlertId = null;
+let lastEventId = null;
 
 function table(rows, cols) {
   return `<table><tr>${cols.map(([, h]) => `<th>${h}</th>`).join("")}</tr>${rows.map((r) =>
@@ -178,7 +178,7 @@ async function loadOrders() {
       <button class="small" onclick="sendOrder('${o.order_id}')">${o.status === "QUEUED" ? "Retry" : "Approve"}</button>
     </div>`).join("") : "None";
   const {offers = []} = await api("/api/offers");
-  $("offers").innerHTML = offers.length ? table(offers, [["alert_id", "Alert"], ["customer_id", "Customer"],
+  $("offers").innerHTML = offers.length ? table(offers, [["event_id", "Event"], ["customer_id", "Customer"],
     ["offer_type", "Offer"], ["sku", "SKU"], ["discount_percent", "% off"], ["supplier_order_id", "Order"]]) : "None yet.";
 }
 
@@ -202,7 +202,7 @@ function renderRun(run) {
     <details class="step"><summary><span class="n">${i + 1}</span><span class="tool">${s.tool}</span>
       <span class="brief">${esc(brief(s.output))}</span></summary>
       <pre>input:  ${esc(JSON.stringify(s.input))}\noutput: ${esc(JSON.stringify(s.output, null, 2))}</pre></details>`).join("");
-  if (!run.check) { $("offer").innerHTML = run.status === "skipped" ? "No new offer: this alert was already handled." : "Working..."; return; }
+  if (!run.check) { $("offer").innerHTML = run.status === "skipped" ? "No new offer: this event was already handled." : "Working..."; return; }
   const {offer, approved, problems, tier, discount_cap} = run.check;
   const proposed = run.proposed_offer;
   $("offer").innerHTML = `
@@ -215,10 +215,10 @@ function renderRun(run) {
     <p class="muted">Supplier order: ${offer.supplier_order_id ?? "none"}</p>`;
 }
 
-async function waitForRun(alertId) {
+async function waitForRun(eventId) {
   let run;
   for (let i = 0; i < 200; i++) {
-    run = await fetch(`/api/runs/${alertId}`).then((r) => r.ok ? r.json() : null);
+    run = await fetch(`/api/runs/${eventId}`).then((r) => r.ok ? r.json() : null);
     if (run) renderRun(run);
     if (run && !["received", "running"].includes(run.status)) return;
     await sleep(600);
@@ -230,19 +230,18 @@ async function buy() {
   $("steps").innerHTML = $("note").textContent = "";
   $("offer").innerHTML = '<span class="muted">No offer yet.</span>';
   setStatus("warn", "Sending");
-  const event = await api("/api/purchase", {customer_id: $("customer").value, sku: $("product").value, warehouse: $("warehouse").value});
-  $("flow").innerHTML = `Stock feed: <b>${event.event_id}</b> sale of ${event.sku} from ${event.warehouse}...`;
-  let result;
-  for (let i = 0; i < 50 && !(result && result.result); i++) { await sleep(400); result = await api(`/api/events/${event.event_id}`); }
-  if (!result || !result.result) { setStatus("bad", "No answer from the stock feed"); $("buy").disabled = false; return; }
+  const [sku, warehouse] = [$("product").value, $("warehouse").value];
+  const result = await api("/api/purchase", {customer_id: $("customer").value, sku, warehouse});
   if (result.result === "sold") {
-    $("flow").innerHTML = `Stock feed: <b>${event.event_id}</b> sale of ${event.sku} from ${event.warehouse} <span class="badge ok">Sold</span> No alert, the agent is not needed.`;
+    $("flow").innerHTML = `Web shop: ${sku} from ${warehouse} <span class="badge ok">Sold</span> No stock-out event, the agent is not needed.`;
     setStatus("ok", "Sold");
-  } else {
-    $("flow").innerHTML = `Stock feed: <b>${event.event_id}</b> sale of ${event.sku} from ${event.warehouse} <span class="badge bad">None left</span> → alert <b>${result.alert_id}</b> → agent`;
-    lastAlertId = result.alert_id;
-    await waitForRun(lastAlertId);
+  } else if (result.event) {
+    $("flow").innerHTML = `Web shop: ${sku} from ${warehouse} <span class="badge bad">None left</span> → stock-out event <b>${result.event.event_id}</b> → agent`;
+    lastEventId = result.event.event_id;
+    await waitForRun(lastEventId);
     $("again").disabled = false;
+  } else {
+    setStatus("bad", "Web shop error: " + esc(result.error ?? "unknown"));
   }
   $("buy").disabled = false;
   loadData(true);
@@ -251,9 +250,9 @@ async function buy() {
 
 async function again() {
   $("again").disabled = true;
-  await api(`/api/alerts/${lastAlertId}/redeliver`, {});
+  await api(`/api/stockouts/${lastEventId}/redeliver`, {});
   await sleep(800);
-  await waitForRun(lastAlertId);
+  await waitForRun(lastEventId);
   $("again").disabled = false;
 }
 

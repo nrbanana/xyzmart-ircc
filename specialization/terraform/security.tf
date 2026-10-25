@@ -49,10 +49,10 @@ resource "google_bigquery_dataset_iam_member" "tool_reads_shared" {
 
 resource "google_pubsub_topic_iam_member" "publishers" {
   for_each = {
-    "agent stock-events"           = ["agent", "stock-events"]    # demo "Customer buys"
-    "agent sold-out-alerts"        = ["agent", "sold-out-alerts"] # demo "Send the same alert again"
-    "agent customer-offers"        = ["agent", "customer-offers"]
-    "tool-service sold-out-alerts" = ["tool-service", "sold-out-alerts"]
+    # In production the web shop's own service account publishes stock-out events. In the demo,
+    # the agent service plays the web shop ("Customer buys", "Send the same event again").
+    "agent stockout-events" = ["agent", "stockout-events"]
+    "agent customer-offers" = ["agent", "customer-offers"]
   }
   topic  = google_pubsub_topic.topic[each.value[1]].name
   role   = "roles/pubsub.publisher"
@@ -63,12 +63,11 @@ resource "google_pubsub_topic_iam_member" "publishers" {
 
 resource "google_cloud_run_v2_service_iam_member" "invokers" {
   for_each = {
-    "pubsub-push agent"        = ["pubsub-push", "agent"]
-    "pubsub-push tool-service" = ["pubsub-push", "tool-service"]
-    "agent tool-service"       = ["agent", "tool-service"]
-    "agent supplier-stub"      = ["agent", "supplier-stub"] # demo "Supplier down" switch
-    "workflow tool-service"    = ["workflow", "tool-service"]
-    "workflow supplier-stub"   = ["workflow", "supplier-stub"]
+    "pubsub-push agent"      = ["pubsub-push", "agent"]
+    "agent tool-service"     = ["agent", "tool-service"]
+    "agent supplier-stub"    = ["agent", "supplier-stub"] # demo "Supplier down" switch
+    "workflow tool-service"  = ["workflow", "tool-service"]
+    "workflow supplier-stub" = ["workflow", "supplier-stub"]
   }
   name   = google_cloud_run_v2_service.svc[each.value[1]].name
   role   = "roles/run.invoker"

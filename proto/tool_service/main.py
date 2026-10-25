@@ -1,8 +1,7 @@
 """Tool service: the only part of the system that reads data or places orders.
 
 It does three jobs:
-  1. Applies the live stock feed (sales, restocks) and raises a sold-out alert
-     when a customer's purchase cannot be filled.
+  1. Records each stock-out event, so a message Pub/Sub delivers twice is acted on once.
   2. Serves the agent's tools: stock, loyalty, similar products, supplier order.
   3. Enforces the business rules in code, so a tricked or faulty model cannot break them:
      - maximum discount and allowed offer types per loyalty tier
@@ -16,11 +15,12 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 import store
 from shared import cloud
@@ -51,51 +51,35 @@ def healthz():
     return {"ok": True}
 
 
-# ---- 1. live stock feed and sell-out detection -----------------------------
+# ---- 1. stock-out events: each one is handled once -------------------------
 
-class StockEvent(BaseModel):
-    event_id: str
-    type: Literal["sale", "restock"]
+class StockoutEvent(BaseModel):
+    """A purchase found no stock. The contract is written out in the README, "Stock-out event contract"."""
+    event_id: str = Field(min_length=1, max_length=64)
+    sku: str = Field(min_length=1)
+    warehouse: Literal["SYD", "MEL"]
+    customer_id: str = Field(min_length=1)
+    occurred_at: datetime
+
+
+@app.post("/stockout-events")
+def record_stockout(event: StockoutEvent):
+    """The agent service calls this before acting. Pub/Sub can deliver twice; only the first counts."""
+    return {"duplicate": not store.save_stockout(event.model_dump())}
+
+
+class Purchase(BaseModel):
     sku: str
-    warehouse: str
-    quantity: int = Field(default=1, gt=0)
-    customer_id: str | None = None
+    warehouse: Literal["SYD", "MEL"]
 
 
-@app.post("/pubsub/stock-events")
-def on_stock_event(envelope: dict):
-    """Pub/Sub push endpoint for the stock feed. Always answers 2xx so bad messages are not redelivered forever."""
-    try:
-        event = StockEvent(**cloud.read_push(envelope))
-    except (ValidationError, KeyError, ValueError) as e:
-        return {"ignored": str(e)[:200]}
-    if store.get_event(event.event_id):
-        return {"duplicate": True}
-    if not store.get_product(event.sku):
-        return {"ignored": f"unknown product {event.sku}"}
-
-    alert_id = None
-    if event.type == "restock":
-        store.add_stock(event.sku, event.warehouse, event.quantity)
-        result = "restocked"
-    elif store.take_stock(event.sku, event.warehouse, event.quantity):
-        result = "sold"
-    else:
-        # Deliberately simple: this warehouse could not fill the order. Whether the product
-        # is really sold out everywhere is the agent's first decision.
-        result, alert_id = "out_of_stock", f"ALERT-{event.event_id}"
-        cloud.publish("sold-out-alerts", {"alert_id": alert_id, "sku": event.sku,
-                                          "warehouse": event.warehouse, "customer_id": event.customer_id})
-    store.save_event(event.model_dump() | {"result": result, "alert_id": alert_id})
-    return {"result": result, "alert_id": alert_id}
-
-
-@app.get("/stock-events/{event_id}")
-def get_stock_event(event_id: str):
-    event = store.get_event(event_id)
-    if not event:
-        raise HTTPException(404, "Not processed yet")
-    return event
+@app.post("/demo/purchase")
+def demo_purchase(body: Purchase):
+    """Demo only: stands in for xyzMart's order system, which owns stock in production.
+    Takes one unit in a single atomic statement, so two buyers cannot both get the last one."""
+    if not store.get_product(body.sku):
+        raise HTTPException(404, f"Unknown product {body.sku}")
+    return {"result": "sold" if store.take_stock(body.sku, body.warehouse, 1) else "out_of_stock"}
 
 
 @app.post("/admin/reset")

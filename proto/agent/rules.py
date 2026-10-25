@@ -34,22 +34,22 @@ def build_offer(loyalty: dict, stock: dict, substitutes: list[dict], order: dict
     return offer | {"sold_out": True, "discount_percent": discount, "supplier_order_id": order.get("order_id")}
 
 
-async def decide(alert: dict, log=lambda tool, args, result: None) -> dict:
+async def decide(stockout: dict, log=lambda tool, args, result: None) -> dict:
     """Same steps as the agent, in a fixed order. log(tool, args, result) records each call."""
     async def step(name, func, **args):
         result = await func(**args)
         log(name, args, result)
         return result
 
-    stock = await step("check_stock", tools.check_stock, sku=alert["sku"])
-    loyalty = await step("check_loyalty", tools.check_loyalty, customer_id=alert["customer_id"])
-    stock.setdefault("sku", alert["sku"])
+    stock = await step("check_stock", tools.check_stock, sku=stockout["sku"])
+    loyalty = await step("check_loyalty", tools.check_loyalty, customer_id=stockout["customer_id"])
+    stock.setdefault("sku", stockout["sku"])
     if stock.get("available", 0) > 0:
         return build_offer(loyalty, stock, [], {})
     found = await step("find_similar_products", tools.find_similar_products,
-                       query=stock.get("name", alert["sku"]), exclude_sku=alert["sku"])
-    order = await step("order_from_supplier", tools.submit_order, sku=alert["sku"],
+                       query=stock.get("name", stockout["sku"]), exclude_sku=stockout["sku"])
+    order = await step("order_from_supplier", tools.submit_order, sku=stockout["sku"],
                        quantity=stock.get("suggested_reorder_quantity", 10),
                        priority="urgent" if loyalty.get("tier") == "Gold" else "normal",
-                       idempotency_key=f"{alert['alert_id']}:{alert['sku']}")
+                       idempotency_key=f"{stockout['event_id']}:{stockout['sku']}")
     return build_offer(loyalty, stock, found.get("results", []), order)
