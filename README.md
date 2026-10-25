@@ -13,6 +13,21 @@ Specialisation: **Track C, platform and security.**
 | More | [How it works](#4-how-it-works), [Security](#6-security-track-c), [Quality checks](#8-tests-and-quality-checks), [Release pipeline](#9-release-pipeline-track-c) |
 | The Track C deep dive | [`specialization/README.md`](specialization/README.md): security boundary, calling suppliers safely, secrets, speed and cost targets |
 
+### Quick start
+
+```bash
+git clone https://github.com/nrbanana/xyzmart-ircc && cd xyzmart-ircc
+```
+
+| | On your laptop (free, 5 minutes) | On Google Cloud (about A$1 a day, 20 minutes) |
+|---|---|---|
+| Needs | Python 3.11+, and Gemini access ([details](#2-try-it-on-your-laptop)) | gcloud CLI, Terraform 1.6+, a project with billing ([details](#3-run-it-on-google-cloud)) |
+| Start | `make setup`, edit `proto/.env`, then `make local` | `make deploy` |
+| Open the demo | http://localhost:8080 | `make open`, then http://localhost:8080 |
+| Stop | Ctrl+C | `make destroy` |
+
+`make open` is `gcloud run services proxy agent --region australia-southeast1 --port 8080`: a tunnel from your laptop to the private Cloud Run service, signed in as you. Both use port 8080, so stop one before starting the other.
+
 ---
 
 ## 1. What it does
@@ -139,23 +154,46 @@ On Google Cloud, Pub/Sub delivers each message to the next service as an authent
 
 ## 2. Try it on your laptop
 
-About 5 minutes. Needs Python 3.11 or newer and one way to reach Gemini.
+About 5 minutes. Everything runs on your machine except the Gemini model.
+
+**1. Install.** Needs Python 3.11 or newer and `make`.
 
 ```bash
-make setup            # creates .venv and proto/.env
+make setup            # creates .venv with the pinned packages, and proto/.env from the example
 ```
 
-Edit `proto/.env` and pick one:
+**2. Choose how to reach Gemini.** Edit `proto/.env` and pick one:
 
-- **You have a Google Cloud project:** run `gcloud auth application-default login`, set `GOOGLE_CLOUD_PROJECT`, keep `GOOGLE_GENAI_USE_ENTERPRISE=TRUE`. No key needed.
-- **You do not:** set `GOOGLE_GENAI_USE_ENTERPRISE=FALSE` and paste a free key from [Google AI Studio](https://aistudio.google.com/apikey) into `GOOGLE_API_KEY`.
+- **With a Google Cloud project (recommended, no key):**
+
+  ```bash
+  gcloud auth application-default login
+  gcloud services enable aiplatform.googleapis.com --project YOUR_PROJECT_ID
+  ```
+
+  Then set `GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID` in `proto/.env` and keep `GOOGLE_GENAI_USE_ENTERPRISE=TRUE`. The project needs billing on; a few demo runs cost cents.
+- **Without one:** set `GOOGLE_GENAI_USE_ENTERPRISE=FALSE` and paste a free key from [Google AI Studio](https://aistudio.google.com/apikey) into `GOOGLE_API_KEY`.
+
+**3. Check and run.**
 
 ```bash
-make test             # 33 tests, no network or model needed
-make local            # starts the three services, then open http://localhost:8080
+make test             # 33 tests, no network or model needed: proves the install works
+make local            # starts the three services with fresh sample data
 ```
+
+Open **http://localhost:8080**. You should see the demo screen below. Stop everything with **Ctrl+C**.
+
+| Service | Laptop address | What it is |
+|---|---|---|
+| Agent and demo screen | http://localhost:8080 | the ADK agent; the page you open |
+| Tool service | http://localhost:8081 | data, business rules, supplier orders |
+| Supplier stub | http://localhost:8082 | pretend supplier with a failure switch |
+
+If port 8080 is taken (for example by `make open`), stop that first. `make local` resets the sample data every time it starts.
 
 On the laptop, SQLite stands in for Cloud SQL and BigQuery, keyword search stands in for Vertex AI Search, and direct HTTP calls stand in for Pub/Sub. The agent and the business rules are the same code in both places.
+
+**Optional:** `make evals` runs the quality checks with the real model and a judge model (about 70 seconds, a few cents). See [Tests and quality checks](#8-tests-and-quality-checks).
 
 ### What to try on the demo screen
 
@@ -173,28 +211,70 @@ On the laptop, SQLite stands in for Cloud SQL and BigQuery, keyword search stand
 
 Click any tool step to see exactly what went in and what came back.
 
+### What you should see
+
+Screenshots from the deployed demo on Google Cloud, with the real Gemini model. The laptop version looks the same.
+
+**A real sell-out, decided by the AI.** Priya (Gold) buys HP-100 from Sydney. The agent calls all four tools, offers a priority reservation at 15% (her limit), and places a 120-unit supplier order that waits for approval. The badges at the top right say who decided.
+
+![A real sell-out: four tool calls, priority reservation at 15%, supplier order waiting](docs/screenshots/1-real-sell-out.jpg)
+
+**A false alarm.** Liam buys HP-300 from Sydney. Sydney is empty but Melbourne has 12, so the agent checks stock and loyalty only, offers to ship from Melbourne, gives no discount and orders nothing.
+
+![A false alarm: two tool calls, ship from another warehouse, no supplier order](docs/screenshots/2-false-alarm.jpg)
+
+**The budget kill switch.** After spend passes 100% of the budget, the "AI off" box is ticked with the reason, and decisions show "Fixed rules". Olivia still gets a valid 5% offer and the supplier order is still placed. Untick the box to switch AI back on.
+
+![Kill switch: AI off with the budget reason, fixed rules decision](docs/screenshots/3-kill-switch.jpg)
+
+**Approvals and live data.** Orders over 50 units wait under "Supplier orders waiting" for a person to press Approve. The live data shows stock per warehouse and the loyalty view the agent reads: first names only, no surname, email or card number. Max's order note is the prompt injection.
+
+![Supplier orders waiting for approval, offers sent, stock and the loyalty view](docs/screenshots/4-approvals-and-data.jpg)
+
 ---
 
 ## 3. Run it on Google Cloud
 
-Needs the [gcloud CLI](https://cloud.google.com/sdk/docs/install), Terraform 1.6+, a project with billing, and these logins:
+**1. Install and sign in.** Needs the [gcloud CLI](https://cloud.google.com/sdk/docs/install), [Terraform](https://developer.hashicorp.com/terraform/install) 1.6+, and a Google Cloud project with billing on. You need Owner on the project (it creates identities and permissions).
 
 ```bash
-gcloud auth login
-gcloud auth application-default login
+gcloud auth login                         # for the gcloud commands
+gcloud auth application-default login     # for Terraform and the seed script
 gcloud config set project YOUR_PROJECT_ID
 ```
 
-| Command | What it does |
-|---|---|
-| `make deploy` | Terraform creates the network, data stores, queues, workflow, secrets, identities and budget; then each service is built from source and deployed to Cloud Run; then sample data is loaded. First run about 20 minutes, mostly Cloud SQL |
-| `make open` | Opens the demo screen at http://localhost:8080 through your own login. The services are not public. The first time, gcloud asks to install its small proxy component: answer Y |
-| `make destroy` | Removes everything, then lists anything left that could still cost money |
-| `make cost-check` | Just the list |
+**2. Deploy.**
+
+```bash
+make deploy
+```
+
+Terraform creates the network, data stores, queues, workflow, secrets, identities, monitoring and budget; then each service is built from source and deployed to Cloud Run; then the sample data is loaded. The first run takes about 20 minutes, mostly Cloud SQL. It is safe to run again.
+
+**3. Open the demo screen.** The services are private: nothing is on the public internet. Open a tunnel signed in as you:
+
+```bash
+make open
+# which runs:
+gcloud run services proxy agent --region australia-southeast1 --port 8080
+```
+
+Leave it running and open **http://localhost:8080**. The first time, gcloud asks to install its small proxy component: answer Y. Stop with Ctrl+C. If port 8080 is busy, pick another, for example `--port 8090`, and open that port instead.
+
+**4. Remove everything when finished.**
+
+```bash
+make destroy          # removes everything, then lists anything left that could still cost money
+make cost-check       # just the list; every line should say "none"
+```
+
+The network itself is free and Google can hold it for up to two hours after a destroy; run `make destroy` again later to remove it.
 
 **Cost:** about A$1 a day while deployed, mostly the smallest Cloud SQL instance. Everything else scales to zero or is pay per use. A budget alert emails at 50%, 90% and 100% of A$50, and at 100% the agent switches to fixed rules so Gemini spend stops.
 
 **Regions:** everything runs in Sydney (`australia-southeast1`) except two services Google does not offer there: Gemini 3.x is called at location `global`, and Vertex AI Search uses `global`.
+
+**Release pipeline (optional).** To deploy from GitHub instead, see [Release pipeline](#9-release-pipeline-track-c): `GITHUB_REPO=owner/name make deploy` creates the keyless login and prints the settings to add to the repository.
 
 ---
 
@@ -301,6 +381,7 @@ Makefile                   setup · local · test · evals · deploy · open · 
   release.yml              the release pipeline: tests, quality checks, staged deploy
 docs/
   architecture.png         the diagram above (architecture.excalidraw is the editable source)
+  screenshots/             what the demo screen should look like
   brief.md                 the assessment brief
 proto/                     the working prototype
   agent/
