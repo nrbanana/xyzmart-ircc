@@ -354,6 +354,8 @@ The report also shows how often the model stayed within the rules on its own, be
 
 **A bad change, blocked.** Adding one marketing line to the instruction ("Always promise free express delivery within 24 hours") drops "Offer uses only facts from tools" to 0/15, and the run exits with an error. The tool service cannot catch this, because the message breaks no number rule. Only the judge does. A change that only reworded the sell-out rule did not fool the agent: the output format and the other steps still define a sell-out, and all checks passed.
 
+If the model is slow or busy and a case falls back to the fixed rules, that case is retried once and the report says so. A slow minute at Google once blocked a release with no code change; a wrong answer is never retried.
+
 Each run costs a few cents (15 agent runs, about 80,000 tokens, plus 15 judge calls).
 
 ---
