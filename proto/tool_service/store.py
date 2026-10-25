@@ -30,9 +30,8 @@ SCHEMA = [
     """CREATE TABLE IF NOT EXISTS supplier_orders (order_id TEXT PRIMARY KEY, idempotency_key TEXT UNIQUE,
            sku TEXT, quantity INTEGER, priority TEXT, status TEXT, supplier_ref TEXT, approval_url TEXT,
            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
-    """CREATE TABLE IF NOT EXISTS stock_events (event_id TEXT PRIMARY KEY, type TEXT, sku TEXT,
-           warehouse TEXT, quantity INTEGER, customer_id TEXT, result TEXT, alert_id TEXT,
-           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
+    """CREATE TABLE IF NOT EXISTS stockout_events (event_id TEXT PRIMARY KEY, sku TEXT, warehouse TEXT,
+           customer_id TEXT, occurred_at TEXT, received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""",
 ]
 # Laptop only: in Google Cloud these live in BigQuery, created by Terraform.
 LOCAL_CUSTOMER_SCHEMA = [
@@ -66,7 +65,7 @@ def init_db(reset: bool = False) -> None:
     for statement in SCHEMA + (LOCAL_CUSTOMER_SCHEMA if RUN_MODE == "local" else []):
         sql(statement)
     if reset:
-        for table in ("stock_events", "supplier_orders", "stock", "products"):
+        for table in ("stockout_events", "supplier_orders", "stock", "products"):
             sql(f"DELETE FROM {table}")
     if sql("SELECT COUNT(*) AS n FROM products")[0]["n"]:
         return
@@ -100,23 +99,12 @@ def take_stock(sku: str, warehouse: str, quantity: int) -> bool:
                     " AND quantity >= :q RETURNING quantity", q=quantity, sku=sku, w=warehouse))
 
 
-def add_stock(sku: str, warehouse: str, quantity: int) -> None:
-    sql("UPDATE stock SET quantity = quantity + :q WHERE sku = :sku AND warehouse = :w",
-        q=quantity, sku=sku, w=warehouse)
-
-
-def save_event(event: dict) -> bool:
-    """Record a stock event. False if this event id was already processed."""
-    if sql("SELECT 1 AS seen FROM stock_events WHERE event_id = :id", id=event["event_id"]):
-        return False
-    sql("INSERT INTO stock_events (event_id, type, sku, warehouse, quantity, customer_id, result, alert_id)"
-        " VALUES (:event_id, :type, :sku, :warehouse, :quantity, :customer_id, :result, :alert_id)", **event)
-    return True
-
-
-def get_event(event_id: str) -> dict | None:
-    rows = sql("SELECT * FROM stock_events WHERE event_id = :id", id=event_id)
-    return rows[0] if rows else None
+def save_stockout(event: dict) -> bool:
+    """Record a stock-out event in one atomic statement. False if this event id was already recorded."""
+    return bool(sql("INSERT INTO stockout_events (event_id, sku, warehouse, customer_id, occurred_at)"
+                    " VALUES (:event_id, :sku, :warehouse, :customer_id, :occurred_at)"
+                    " ON CONFLICT (event_id) DO NOTHING RETURNING event_id",
+                    **event | {"occurred_at": event["occurred_at"].isoformat()}))
 
 
 # ---- supplier orders -------------------------------------------------------

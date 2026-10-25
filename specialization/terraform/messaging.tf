@@ -1,19 +1,17 @@
 # Message queues (Pub/Sub) and the supplier order workflow (Workflows).
 #
-#   stock-events    live sales and restocks       -> tool service (detects sell-outs)
-#   sold-out-alerts a purchase could not be filled -> agent
-#   customer-offers the checked offer              -> customer channels (here: an audit subscription)
+#   stockout-events a web shop purchase found no stock -> agent
+#   customer-offers the checked offer                  -> customer channels (here: an audit subscription)
 
 resource "google_pubsub_topic" "topic" {
-  for_each   = toset(["stock-events", "sold-out-alerts", "customer-offers"])
+  for_each   = toset(["stockout-events", "customer-offers"])
   name       = each.value
   depends_on = [google_project_service.apis]
 }
 
 locals {
   push = {
-    "stock-events"    = "${local.url["tool-service"]}/pubsub/stock-events"
-    "sold-out-alerts" = "${local.url["agent"]}/pubsub/alerts"
+    "stockout-events" = "${local.url["agent"]}/pubsub/stockouts"
   }
 }
 
