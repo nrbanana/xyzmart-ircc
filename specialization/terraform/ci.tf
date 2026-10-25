@@ -3,7 +3,7 @@
 # No key file exists in GitHub. Created only when github_repo is set.
 #
 #   ircc-ci-evals   any branch of the repo   may only call Gemini (quality checks on pull requests)
-#   ircc-ci-deploy  main branch only         may deploy code, shift traffic and read logs
+#   ircc-ci-deploy  release.yml on main only may deploy code, shift traffic and read logs
 
 variable "github_repo" {
   description = "owner/name of the GitHub repository allowed to use the pipeline identities, for example nrbanana/xyzmart-ircc"
@@ -29,7 +29,8 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   attribute_mapping = {
     "google.subject"       = "assertion.sub"
     "attribute.repository" = "assertion.repository"
-    "attribute.ref"        = "assertion.ref" # refs/heads/<branch>
+    # "yes" only for the release workflow file running on main: no other workflow or branch may deploy
+    "attribute.deploy" = "assertion.job_workflow_ref == '${var.github_repo}/.github/workflows/release.yml@refs/heads/main' ? 'yes' : 'no'"
   }
   attribute_condition = "assertion.repository == '${var.github_repo}'"
   oidc {
@@ -48,9 +49,8 @@ locals {
   pool = var.github_repo == "" ? "" : google_iam_workload_identity_pool.github["on"].name
   ci_users = var.github_repo == "" ? {} : {
     evals = "principalSet://iam.googleapis.com/${local.pool}/attribute.repository/${var.github_repo}"
-    # By branch attribute, not by subject: GitHub's subject format can include account and repository
-    # numbers. The provider condition above already limits the pool to this repository.
-    deploy = "principalSet://iam.googleapis.com/${local.pool}/attribute.ref/refs/heads/main"
+    # By attribute, not by subject: GitHub's subject format can include account and repository numbers.
+    deploy = "principalSet://iam.googleapis.com/${local.pool}/attribute.deploy/yes"
   }
 }
 
