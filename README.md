@@ -96,7 +96,7 @@ The agent service answers every push with a success code and a JSON body, for ex
 
 Stock can change between the failed purchase and the agent's run: a restock may land, or the customer only missed out at one warehouse. This is why the agent never trusts the event alone. Its first job is to check live stock and decide whether the sell-out is real.
 
-Where the stock count comes from: in the demo, the tool service holds it in Cloud SQL and the pretend web shop takes one unit per purchase, in one statement, so two buyers cannot both get the last one. In production, xyzMart's order system owns it and a change feed (Datastream) keeps the copy the agent reads up to date.
+Where the stock count comes from: in the demo, the tool service holds it in Cloud SQL and the pretend web shop takes one unit per purchase, in one statement, so two buyers cannot both get the last one. In production, xyzMart's order system (the legacy ERP) owns it and a change feed (Datastream) keeps the copy the agent reads up to date.
 
 Left out on purpose for this version, and the first things to add in production: a `schema_version` field, and a dead-letter topic that keeps ignored events for someone to inspect.
 
@@ -282,6 +282,8 @@ The network itself is free and Google can hold it for up to two hours after a de
 
 ### The agent (`proto/agent/agent.py`)
 
+The brief asks for the complete Python file with the system directives, state management and error fallbacks. Two files hold it: [`proto/agent/agent.py`](proto/agent/agent.py) has the directive, the tools, the output format and the callbacks; [`proto/agent/main.py`](proto/agent/main.py) has the per-event session (state), the duplicate check, the time and token limits, and the fallback to fixed rules.
+
 | ADK piece | What it does here | Brief requirement |
 |---|---|---|
 | `LlmAgent` | Gemini + a written instruction (the system directive) + four tools | System directives |
@@ -338,7 +340,7 @@ Alternatives must be in stock right now. Supplier orders over 50 units need a pe
 
 **ADK over LangGraph.** ADK is Google's framework, deploys straight to Agent Platform, and has callbacks and evaluation built in. LangGraph would need more glue for the same result.
 
-**Gemini 3.6 Flash.** Fast and reliable at tool use: about 5 to 6 seconds and 5,000 tokens per decision, roughly A$0.006. Flash-Lite is 3 times cheaper but weaker at tool use, and at demo volume the saving is under 50 cents.
+**Gemini 3.6 Flash, named once in code.** The model is one line, `MODEL` in [`agent.py`](proto/agent/agent.py), so changing it is a pull request that goes through the quality checks like any other release. It is fast and reliable at tool use: about 5 to 6 seconds and 5,000 tokens per decision, roughly A$0.006. Flash-Lite is 3 times cheaper but weaker at tool use, and at demo volume the saving is under 50 cents.
 
 **Two guards against an ungrounded answer.** In early testing about 1 run in 12 answered straight from the event without calling any tools. Now the first model turn is forced to call a tool, and the agent service also rejects any answer that skipped the required tools. Since the change, 12 of 12 test runs used the tools.
 
@@ -351,7 +353,7 @@ Alternatives must be in stock right now. Supplier orders over 50 units need a pe
 
 Each is behind a setting that is off by default. With it switched on, `terraform plan` produces the full set of resources.
 
-**Demo shortcuts, stated plainly.** Run history and the "Supplier down" switch live in memory, so each service runs at most one instance. Production would keep run history in Cloud SQL or Firestore. The AI on/off setting is already in the database, because the budget kill switch must survive a restart. Terraform state is kept on the laptop; a team would use a Cloud Storage backend.
+**Demo shortcuts, stated plainly.** Run history and the "Supplier down" switch live in memory, so each service runs at most one instance. Production would keep run history in Cloud SQL or Firestore. The AI on/off setting is already in the database, because the budget kill switch must survive a restart. Terraform state is kept on the laptop; a team would use a Cloud Storage backend. Observability is logs, log-based metrics and alerts; request tracing (ADK's OpenTelemetry export to Cloud Trace) is the next step. Vertex AI Search indexes the product catalogue only; unstructured customer profiles (support notes, preferences) would be a second data store searched the same way, with personal data kept out.
 
 ---
 
@@ -475,6 +477,7 @@ Push to main ─► unit tests ─► quality checks ─► scripts/release.sh
 ```
 
 - **Nothing ships unless the checks pass.** A failed job stops every job after it. The checks run again on main, so even a merged bad change never reaches the deploy step.
+- **A model release is a code change.** The agent's model is one line in `agent.py`. The quality checks test that model, and the deploy ships the same code, so a new model cannot reach customers without passing.
 - **No keys in GitHub.** The pipeline logs in to Google Cloud with Workload Identity Federation (`specialization/terraform/ci.tf`): GitHub proves which repository and branch a job runs for, and Google only trusts this repository. There are two identities:
   - **Quality checks:** any branch of the repository can use it, and it may only call Gemini.
   - **Deploy:** only jobs on `main` can use it, and it may only deploy code, shift traffic, read logs, and run as the four service accounts.

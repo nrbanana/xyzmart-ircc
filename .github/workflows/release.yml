@@ -41,7 +41,6 @@ jobs:
       GOOGLE_GENAI_USE_ENTERPRISE: "TRUE"
       GOOGLE_CLOUD_PROJECT: ${{ vars.GCP_PROJECT }}
       GOOGLE_CLOUD_LOCATION: global
-      GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.6-flash' }}
       JUDGE_MODEL: ${{ vars.JUDGE_MODEL || 'gemini-3.1-pro-preview' }}
     steps:
       - name: Check the pipeline is connected to Google Cloud

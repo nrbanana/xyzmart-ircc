@@ -188,7 +188,7 @@ def report(results: list[dict], seconds: float) -> bool:
     tokens = sum(r["run"]["tokens"] for r in results)
     lines += ["", f"{'All checks passed' if passed else 'Quality checks FAILED: release blocked'}. "
               f"{len(results)} cases, {tokens} agent tokens, {seconds:.0f} seconds. "
-              f"Agent: {os.getenv('GEMINI_MODEL')}, judge: {JUDGE_MODEL}."]
+              f"Agent: {agent_main.agent.root_agent.model.model}, judge: {JUDGE_MODEL}."]
     text = "\n".join(lines)
     print(text)
     if os.getenv("GITHUB_STEP_SUMMARY"):

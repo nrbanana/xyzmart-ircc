@@ -89,12 +89,17 @@ def look_before_answering(callback_context: Context, llm_request: LlmRequest) ->
     return None
 
 
+# Changing this line is a model release: like any other change it goes through the quality checks
+# in the release pipeline before it reaches customers. GEMINI_MODEL can override it on a laptop only.
+MODEL = "gemini-3.6-flash"
+
+
 def _model():
     if os.getenv("LLM_MODE", "gemini") == "mock":
         from mock_llm import MockLlm
         return MockLlm()
     # Retry busy (429) and temporary server errors with backoff before giving up to the rules fallback.
-    return Gemini(model=os.getenv("GEMINI_MODEL", "gemini-3.6-flash"), retry_options=types.HttpRetryOptions(
+    return Gemini(model=os.getenv("GEMINI_MODEL", MODEL), retry_options=types.HttpRetryOptions(
         attempts=4, initial_delay=1, max_delay=8, http_status_codes=[429, 500, 503]))
 
 

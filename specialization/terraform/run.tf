@@ -14,7 +14,6 @@ locals {
       env = {
         GOOGLE_GENAI_USE_ENTERPRISE = "TRUE"
         GOOGLE_CLOUD_LOCATION       = "global" # Gemini 3.x is not served from Sydney
-        GEMINI_MODEL                = var.gemini_model
         LLM_MODE                    = "gemini"
         TOOL_SERVICE_URL            = local.url["tool-service"]
         SUPPLIER_URL                = local.url["supplier-stub"]

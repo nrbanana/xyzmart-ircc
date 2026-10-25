@@ -31,11 +31,6 @@ variable "budget_aud" {
   default = 50
 }
 
-variable "gemini_model" {
-  type    = string
-  default = "gemini-3.6-flash"
-}
-
 provider "google" {
   project               = var.project_id
   region                = var.region
