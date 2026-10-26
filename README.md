@@ -388,7 +388,6 @@ Makefile                   setup · local · test · evals · deploy · open · 
 docs/
   architecture.png         the diagram above (architecture.excalidraw is the editable source)
   screenshots/             what the demo screen should look like
-  brief.md                 the assessment brief
 proto/                     the working prototype
   agent/
     agent.py               the ADK agent: instruction, tools, output format, callbacks
