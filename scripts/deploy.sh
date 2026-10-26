@@ -33,7 +33,9 @@ deploy() {  # service, folder with its main.py
 deploy supplier-stub supplier_stub & p1=$!
 deploy tool-service tool_service & p2=$!
 deploy agent agent & p3=$!
-wait $p1 && wait $p2 && wait $p3
+failed=0
+for p in $p1 $p2 $p3; do wait $p || failed=1; done
+[ $failed = 0 ] || { echo "A service failed to deploy (see above). Fix it and run make deploy again."; exit 1; }
 
 echo "== 3/4 Loading sample customers (BigQuery) and catalogue (Vertex AI Search)"
 .venv/bin/python proto/data/seed_cloud.py "$PROJECT" "$REGION" "$($TF output -raw search_data_store_id)"
